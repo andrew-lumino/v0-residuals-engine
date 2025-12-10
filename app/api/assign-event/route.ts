@@ -1,0 +1,226 @@
+import { createClient } from "@/lib/db/server"
+import { type NextRequest, NextResponse } from "next/server"
+import { logActionAsync } from "@/lib/utils/history"
+
+interface Participant {
+  agent_id: string
+  agent_name?: string
+  agent_email?: string
+  role: string
+  split_pct: number
+}
+
+interface NewDeal {
+  merchant_name: string
+  mid: string
+  payout_type: string
+  participants: Participant[]
+}
+
+export async function POST(request: NextRequest) {
+  const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+
+  try {
+    const body = await request.json()
+    const { event_id, deal_id, assignment_type, new_deal, status, is_draft } = body
+
+    console.log("[assign-event] Request:", { event_id, deal_id, assignment_type, status, is_draft })
+
+    const supabase = await createClient()
+
+    const { data: eventData, error: eventFetchError } = await supabase
+      .from("csv_data")
+      .select("*")
+      .eq("id", event_id)
+      .single()
+
+    if (eventFetchError || !eventData) {
+      console.error("[assign-event] Event fetch error:", eventFetchError)
+      return NextResponse.json({ error: "Event not found" }, { status: 404 })
+    }
+
+    console.log("[assign-event] Event data:", {
+      id: eventData.id,
+      mid: eventData.mid,
+      merchant_name: eventData.merchant_name,
+      fees: eventData.fees,
+      volume: eventData.volume,
+      payout_month: eventData.payout_month,
+    })
+
+    let finalDealId = deal_id
+    let participants: Participant[] = []
+
+    if (assignment_type === "new_deal" && new_deal) {
+      console.log("[assign-event] Creating/updating deal for MID:", new_deal.mid)
+
+      const generatedDealId = `deal_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`
+
+      const dealPayload = {
+        deal_id: generatedDealId,
+        mid: new_deal.mid,
+        payout_type: new_deal.payout_type || "residual",
+        participants_json: new_deal.participants.map((p: Participant) => ({
+          partner_airtable_id: p.agent_id,
+          partner_name: p.agent_name,
+          partner_email: p.agent_email,
+          partner_role: p.role,
+          split_pct: p.split_pct,
+        })),
+        assigned_agent_name:
+          new_deal.participants.find((p: Participant) => p.agent_id !== "lumino-company")?.agent_name || null,
+        assigned_at: new Date().toISOString(),
+        available_to_purchase: false,
+        updated_at: new Date().toISOString(),
+      }
+
+      const { data: dealData, error: dealError } = await supabase
+        .from("deals")
+        .upsert(
+          {
+            ...dealPayload,
+            created_at: new Date().toISOString(),
+          },
+          {
+            onConflict: "mid",
+            ignoreDuplicates: false,
+          },
+        )
+        .select("id, deal_id")
+        .single()
+
+      if (dealError) {
+        console.error("[assign-event] Deal upsert error:", dealError)
+        return NextResponse.json({ error: `Failed to create/update deal: ${dealError.message}` }, { status: 500 })
+      }
+
+      console.log("[assign-event] Deal upserted:", dealData)
+      finalDealId = dealData.id
+      participants = new_deal.participants
+    } else if (assignment_type === "existing_deal" && deal_id) {
+      const { data: existingDeal, error: dealFetchError } = await supabase
+        .from("deals")
+        .select("*")
+        .eq("id", deal_id)
+        .single()
+
+      if (dealFetchError || !existingDeal) {
+        console.error("[assign-event] Deal fetch error:", dealFetchError)
+        return NextResponse.json({ error: "Deal not found" }, { status: 404 })
+      }
+
+      console.log("[assign-event] Existing deal:", existingDeal)
+      const dealParticipants = existingDeal.participants_json || []
+      participants = dealParticipants.map((p: any) => ({
+        agent_id: p.partner_airtable_id || p.agent_id,
+        agent_name: p.partner_name || p.agent_name,
+        agent_email: p.partner_email || p.agent_email,
+        role: p.partner_role || p.role,
+        split_pct: p.split_pct,
+      }))
+      finalDealId = deal_id
+    }
+
+    const finalStatus = is_draft ? "unassigned" : "pending"
+
+    const primaryPartner = participants.find((p) => p.agent_id !== "lumino-company")
+
+    const updateData: any = {
+      deal_id: finalDealId,
+      assignment_status: finalStatus,
+      payout_type: new_deal?.payout_type || eventData.payout_type || "residual",
+      updated_at: new Date().toISOString(),
+    }
+
+    if (primaryPartner) {
+      updateData.assigned_agent_id = primaryPartner.agent_id
+      updateData.assigned_agent_name = primaryPartner.agent_name || primaryPartner.agent_id
+    }
+
+    console.log("[assign-event] Updating csv_data:", updateData)
+
+    const { error: updateError } = await supabase.from("csv_data").update(updateData).eq("id", event_id)
+
+    if (updateError) {
+      console.error("[assign-event] csv_data update error:", updateError)
+      return NextResponse.json({ error: `Failed to update event: ${updateError.message}` }, { status: 500 })
+    }
+
+    if (finalStatus === "pending" || finalStatus === "confirmed") {
+      console.log("[assign-event] Creating payout records for participants:", participants)
+
+      const fees = Number.parseFloat(eventData.fees) || 0
+      const adjustments = Number.parseFloat(eventData.adjustments) || 0
+      const chargebacks = Number.parseFloat(eventData.chargebacks) || 0
+      const netResidual = fees - adjustments - chargebacks
+
+      console.log("[assign-event] Payout calculation:", { fees, adjustments, chargebacks, netResidual })
+
+      for (const participant of participants) {
+        const splitPct = participant.split_pct || 0
+        const payoutAmount = (netResidual * splitPct) / 100
+
+        const payoutRecord = {
+          csv_data_id: event_id,
+          deal_id: finalDealId ? String(finalDealId) : null,
+          mid: eventData.mid,
+          merchant_name: eventData.merchant_name,
+          payout_month: eventData.payout_month,
+          payout_type: new_deal?.payout_type || eventData.payout_type || "residual",
+          volume: eventData.volume,
+          fees: fees,
+          adjustments: adjustments,
+          chargebacks: chargebacks,
+          net_residual: netResidual,
+          partner_airtable_id: participant.agent_id,
+          partner_role: participant.role,
+          partner_name: participant.agent_name || null,
+          partner_split_pct: splitPct,
+          partner_payout_amount: payoutAmount,
+          assignment_status: finalStatus,
+          paid_status: "unpaid",
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }
+
+        console.log("[assign-event] Creating payout:", {
+          partner: participant.agent_id,
+          partner_name: participant.agent_name,
+          split: splitPct,
+          amount: payoutAmount,
+        })
+
+        const { error: payoutError } = await supabase.from("payouts").upsert(payoutRecord, {
+          onConflict: "csv_data_id,partner_airtable_id",
+        })
+
+        if (payoutError) {
+          console.error("[assign-event] Payout creation error:", payoutError)
+        }
+      }
+    }
+
+    console.log("[assign-event] Success! Deal ID:", finalDealId, "Status:", finalStatus)
+
+    logActionAsync({
+      actionType: assignment_type === "new_deal" ? "create" : "update",
+      entityType: "assignment",
+      entityId: event_id,
+      entityName: eventData.merchant_name || eventData.mid,
+      description: `Assigned ${eventData.merchant_name || eventData.mid} to ${participants.map((p) => p.agent_name || p.agent_id).join(", ")}`,
+      previousData: { assignment_status: eventData.assignment_status, deal_id: eventData.deal_id },
+      newData: { assignment_status: finalStatus, deal_id: finalDealId, participants },
+      requestId,
+    })
+
+    return NextResponse.json({
+      success: true,
+      deal_id: finalDealId,
+      status: finalStatus,
+      participants_count: participants.length,
+    })
+  } catch (error: any) {
+    console.error("[assign-event] Error:", error)
+    return NextResponse.json({ error: error.message || "Failed to assign event" }, { status: 500 })
+  }
+}

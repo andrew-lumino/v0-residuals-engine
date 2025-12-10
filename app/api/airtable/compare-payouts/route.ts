@@ -1,0 +1,211 @@
+import { createServerClient } from "@/lib/db/server"
+import { NextResponse } from "next/server"
+
+const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY
+const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID || "appRygdwVIEtbUI1C"
+const AIRTABLE_TABLE_ID = "tblWZlEw6pM9ytA1x"
+
+const cleanString = (val: any): string => {
+  if (val === null || val === undefined) return ""
+  return String(val)
+    .trim()
+    .replace(/[\r\n]+/g, " ")
+}
+
+const formatPayoutForAirtable = (payout: any) => {
+  const fields: Record<string, any> = {
+    "Payout ID": payout.id,
+    "Deal ID": payout.deal_id || "",
+    MID: String(payout.mid || ""),
+    "Merchant Name": cleanString(payout.merchant_name),
+    "Payout Month": payout.payout_month || "",
+    "Payout Date": payout.payout_date || null,
+    "Partner ID": payout.partner_airtable_id || "",
+    "Partner Name": cleanString(payout.partner_name),
+    "Partner Role": cleanString(payout.partner_role),
+    "Split %": (payout.partner_split_pct || 0) / 100,
+    "Payout Amount": payout.partner_payout_amount || 0,
+    Volume: payout.volume || 0,
+    Fees: payout.fees || 0,
+    "Net Residual": payout.net_residual || 0,
+    "Payout Type": payout.payout_type || "residual",
+    Status: cleanString(payout.assignment_status),
+    "Paid Status": payout.paid_status || "unpaid",
+    "Is Legacy": payout.is_legacy_import ? "Yes" : "No",
+  }
+
+  if (payout.paid_at) {
+    fields["Paid At"] = payout.paid_at
+  }
+
+  return fields
+}
+
+// Compare two values, handling numbers and strings
+const valuesMatch = (airtableVal: any, supabaseVal: any): boolean => {
+  // Handle nulls/undefined
+  if (airtableVal === null || airtableVal === undefined) airtableVal = ""
+  if (supabaseVal === null || supabaseVal === undefined) supabaseVal = ""
+
+  // Handle numbers
+  if (typeof supabaseVal === "number") {
+    return Number(airtableVal) === supabaseVal
+  }
+
+  return String(airtableVal) === String(supabaseVal)
+}
+
+// Fields to compare for changes
+const COMPARE_FIELDS = [
+  "Paid Status",
+  "Paid At",
+  "Status",
+  "Split %",
+  "Payout Amount",
+  "Partner Role",
+  "Partner Name",
+  "Partner ID",
+  "Merchant Name",
+  "MID",
+  "Payout Month",
+  "Volume",
+  "Fees",
+  "Net Residual",
+]
+
+export async function POST(request: Request) {
+  if (!AIRTABLE_API_KEY) {
+    return NextResponse.json({ error: "Missing AIRTABLE_API_KEY environment variable" }, { status: 500 })
+  }
+
+  try {
+    const body = await request.json().catch(() => ({}))
+    const { month } = body
+
+    const supabase = await createServerClient()
+
+    let query = supabase.from("payouts").select("*").order("created_at", { ascending: false }).limit(10000)
+
+    if (month) {
+      query = query.eq("payout_month", month)
+    }
+
+    const { data: allPayouts, error } = await query
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 })
+    }
+
+    if (!allPayouts || allPayouts.length === 0) {
+      return NextResponse.json({
+        success: true,
+        newRecords: [],
+        changedRecords: [],
+        unchangedCount: 0,
+        totalSupabase: 0,
+        totalAirtable: 0,
+      })
+    }
+
+    // Step 2: Fetch existing Airtable records
+    const existingRecords: Map<string, { id: string; fields: any }> = new Map()
+    let offset: string | undefined
+
+    do {
+      const url = new URL(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}`)
+      url.searchParams.set("pageSize", "100")
+      if (offset) {
+        url.searchParams.set("offset", offset)
+      }
+
+      const response = await fetch(url.toString(), {
+        headers: {
+          Authorization: `Bearer ${AIRTABLE_API_KEY}`,
+        },
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        return NextResponse.json(
+          { error: `Failed to fetch from Airtable: ${response.status} - ${errorText}` },
+          { status: 500 },
+        )
+      }
+
+      const data = await response.json()
+
+      for (const record of data.records || []) {
+        const payoutId = record.fields["Payout ID"]
+        if (payoutId) {
+          existingRecords.set(payoutId, record)
+        }
+      }
+      offset = data.offset
+    } while (offset)
+
+    // Step 3: Compare and categorize
+    const newRecords: any[] = []
+    const changedRecords: any[] = []
+    let unchangedCount = 0
+
+    for (const payout of allPayouts) {
+      const airtableData = formatPayoutForAirtable(payout)
+      const existingRecord = existingRecords.get(payout.id)
+
+      if (!existingRecord) {
+        // New record - doesn't exist in Airtable
+        newRecords.push({
+          payoutId: payout.id,
+          mid: payout.mid,
+          merchantName: payout.merchant_name,
+          partnerName: payout.partner_name,
+          payoutMonth: payout.payout_month,
+          payoutAmount: payout.partner_payout_amount,
+          status: payout.assignment_status,
+          paidStatus: payout.paid_status,
+          fields: airtableData,
+        })
+      } else {
+        // Check if any fields changed
+        const existing = existingRecord.fields
+        const changes: { field: string; oldValue: any; newValue: any }[] = []
+
+        for (const field of COMPARE_FIELDS) {
+          if (!valuesMatch(existing[field], airtableData[field])) {
+            changes.push({
+              field,
+              oldValue: existing[field],
+              newValue: airtableData[field],
+            })
+          }
+        }
+
+        if (changes.length > 0) {
+          changedRecords.push({
+            payoutId: payout.id,
+            airtableRecordId: existingRecord.id,
+            mid: payout.mid,
+            merchantName: payout.merchant_name,
+            partnerName: payout.partner_name,
+            payoutMonth: payout.payout_month,
+            changes,
+            fields: airtableData,
+          })
+        } else {
+          unchangedCount++
+        }
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      newRecords,
+      changedRecords,
+      unchangedCount,
+      totalSupabase: allPayouts.length,
+      totalAirtable: existingRecords.size,
+    })
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message || "Failed to compare payouts" }, { status: 500 })
+  }
+}
