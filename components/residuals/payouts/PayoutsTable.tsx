@@ -258,7 +258,7 @@ export function PayoutsTable() {
                 return (
                   <TableRow key={row.partner_airtable_id}>
                     <TableCell className="font-medium">{row.partner_name}</TableCell>
-                    <TableCell className="text-muted-foreground text-xs">Partner</TableCell>
+                    <TableCell className="text-muted-foreground text-xs">{row.partner_role || "Partner"}</TableCell>
                     <TableCell className="text-right font-mono">{row.merchant_count}</TableCell>
                     <TableCell className="text-right font-bold">
                       <MoneyDisplay amount={row.total_payout} />

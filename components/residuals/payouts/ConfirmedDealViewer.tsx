@@ -56,13 +56,29 @@ interface Deal {
 }
 
 interface ConfirmedDealViewerProps {
-  event: UnassignedEvent
-  isOpen: boolean
-  onClose: () => void
-  onComplete: () => void
+  event?: UnassignedEvent | null
+  events?: UnassignedEvent[]
+  isOpen?: boolean
+  onClose?: () => void
+  onComplete?: () => void
 }
 
-export function ConfirmedDealViewer({ event, isOpen, onClose, onComplete }: ConfirmedDealViewerProps) {
+// Normalize participant data to use canonical field names
+const normalizeParticipant = (p: any) => ({
+  partner_airtable_id: p.partner_airtable_id || p.agent_id || p.partner_id || "",
+  partner_name: p.partner_name || p.name || "",
+  partner_role: p.partner_role || p.role || "Partner",
+  partner_email: p.partner_email || p.email || "",
+  split_pct: p.split_pct || 0,
+})
+
+// Check if participant is Lumino Company
+const isLuminoCompany = (p: any) => {
+  const id = p.partner_airtable_id || p.agent_id || p.partner_id
+  return id === "lumino-company"
+}
+
+export function ConfirmedDealViewer({ event, events, isOpen = false, onClose, onComplete }: ConfirmedDealViewerProps) {
   const [partners, setPartners] = useState<Partner[]>([])
   const [deal, setDeal] = useState<Deal | null>(null)
   const [isLoading, setIsLoading] = useState(false)
@@ -74,6 +90,11 @@ export function ConfirmedDealViewer({ event, isOpen, onClose, onComplete }: Conf
   const [deleteConfirmText, setDeleteConfirmText] = useState("")
   const { toast } = useToast()
 
+  // If used as a list view (events prop), just render null for now - this is handled by UnassignedQueue
+  if (events && !event) {
+    return null
+  }
+
   useEffect(() => {
     if (isOpen && event) {
       fetchDealAndPartners()
@@ -81,6 +102,7 @@ export function ConfirmedDealViewer({ event, isOpen, onClose, onComplete }: Conf
   }, [isOpen, event])
 
   const fetchDealAndPartners = async () => {
+    if (!event) return
     setIsLoading(true)
     try {
       console.log("[v0] Fetching deal for confirmed event:", event.id)
@@ -108,13 +130,13 @@ export function ConfirmedDealViewer({ event, isOpen, onClose, onComplete }: Conf
       setPartners(partnersData.partners || [])
 
       if (dealData.deal?.participants_json) {
-        setParticipants(dealData.deal.participants_json)
-        const luminoParticipant = dealData.deal.participants_json.find(
-          (p: any) => p.agent_id === "lumino-company" || p.partner_id === "lumino-company",
-        )
+        // Normalize all participants to use canonical field names
+        const normalizedParticipants = dealData.deal.participants_json.map(normalizeParticipant)
+        setParticipants(normalizedParticipants)
+        const luminoParticipant = normalizedParticipants.find(isLuminoCompany)
         if (luminoParticipant) {
-          const othersSplit = dealData.deal.participants_json
-            .filter((p: any) => p.agent_id !== "lumino-company" && p.partner_id !== "lumino-company")
+          const othersSplit = normalizedParticipants
+            .filter((p: any) => !isLuminoCompany(p))
             .reduce((sum: number, p: any) => sum + (p.split_pct || 0), 0)
           setIsLuminoOverridden(luminoParticipant.split_pct !== 100 - othersSplit)
         }
@@ -179,7 +201,7 @@ export function ConfirmedDealViewer({ event, isOpen, onClose, onComplete }: Conf
         })
         setDeal({ ...deal, participants_json: participants })
         setIsEditing(false)
-        onComplete() // Notify parent to refresh
+        onComplete?.() // Notify parent to refresh
       } else {
         console.error("[v0] Failed to update deal:", responseData)
         toast({
@@ -201,6 +223,7 @@ export function ConfirmedDealViewer({ event, isOpen, onClose, onComplete }: Conf
   }
 
   const handleDelete = async () => {
+    if (!event) return
     if (deleteConfirmText !== "DELETE") {
       toast({
         title: "Confirmation Required",
@@ -226,8 +249,8 @@ export function ConfirmedDealViewer({ event, isOpen, onClose, onComplete }: Conf
           description: "Confirmed event deleted successfully",
         })
         setIsDeleteDialogOpen(false)
-        onClose()
-        onComplete()
+        onClose?.()
+        onComplete?.()
       } else {
         const responseData = await response.json()
         console.error("[v0] Failed to delete event:", responseData)
@@ -250,10 +273,8 @@ export function ConfirmedDealViewer({ event, isOpen, onClose, onComplete }: Conf
   }
 
   const addParticipant = () => {
-    const luminoIndex = participants.findIndex(
-      (p) => p.agent_id === "lumino-company" || p.partner_id === "lumino-company",
-    )
-    const newParticipant = { agent_id: "", role: "Partner", split_pct: 0 }
+    const luminoIndex = participants.findIndex(isLuminoCompany)
+    const newParticipant = { partner_airtable_id: "", partner_name: "", partner_role: "Partner", partner_email: "", split_pct: 0 }
 
     if (luminoIndex !== -1) {
       const updatedParticipants = [...participants]
@@ -268,9 +289,7 @@ export function ConfirmedDealViewer({ event, isOpen, onClose, onComplete }: Conf
     const updatedParticipants = participants.map((p, i) => (i === index ? { ...p, [field]: value } : p))
 
     if (field === "split_pct" && !isLuminoOverridden) {
-      const luminoIndex = updatedParticipants.findIndex(
-        (p) => p.agent_id === "lumino-company" || p.partner_id === "lumino-company",
-      )
+      const luminoIndex = updatedParticipants.findIndex(isLuminoCompany)
       if (luminoIndex !== -1) {
         const participantsSplit = updatedParticipants
           .filter((p, i) => i !== luminoIndex)
@@ -287,12 +306,10 @@ export function ConfirmedDealViewer({ event, isOpen, onClose, onComplete }: Conf
     const participantToRemove = participants[index]
     const updatedParticipants = participants.filter((_, i) => i !== index)
 
-    if (participantToRemove.agent_id === "lumino-company" || participantToRemove.partner_id === "lumino-company") {
+    if (isLuminoCompany(participantToRemove)) {
       setIsLuminoOverridden(false)
     } else if (!isLuminoOverridden) {
-      const luminoIndex = updatedParticipants.findIndex(
-        (p) => p.agent_id === "lumino-company" || p.partner_id === "lumino-company",
-      )
+      const luminoIndex = updatedParticipants.findIndex(isLuminoCompany)
       if (luminoIndex !== -1) {
         const participantsSplit = updatedParticipants
           .filter((p, i) => i !== luminoIndex)
@@ -443,9 +460,8 @@ export function ConfirmedDealViewer({ event, isOpen, onClose, onComplete }: Conf
                 )}
 
                 {participants.map((participant, index) => {
-                  const isLumino =
-                    participant.agent_id === "lumino-company" || participant.partner_id === "lumino-company"
-                  const participantId = participant.agent_id || participant.partner_id
+                  const isLumino = isLuminoCompany(participant)
+                  const participantId = participant.partner_airtable_id
                   const selectedPartner = partners.find((p) => p.id === participantId)
 
                   return (
@@ -470,11 +486,13 @@ export function ConfirmedDealViewer({ event, isOpen, onClose, onComplete }: Conf
                                 <Select
                                   value={participantId}
                                   onValueChange={(value) => {
-                                    updateParticipant(
-                                      index,
-                                      participant.agent_id !== undefined ? "agent_id" : "partner_id",
-                                      value,
-                                    )
+                                    updateParticipant(index, "partner_airtable_id", value)
+                                    // Also update partner_name and partner_email from selected partner
+                                    const partner = partners.find((p) => p.id === value)
+                                    if (partner) {
+                                      updateParticipant(index, "partner_name", partner.name)
+                                      updateParticipant(index, "partner_email", partner.email)
+                                    }
                                     setParticipantSearchTerms((prev) => ({
                                       ...prev,
                                       [index]: "",
@@ -491,7 +509,7 @@ export function ConfirmedDealViewer({ event, isOpen, onClose, onComplete }: Conf
                                             }
                                             return selectedPartner
                                               ? truncateText(`${selectedPartner.name} (${selectedPartner.email})`, 40)
-                                              : participantId
+                                              : participant.partner_name || participantId
                                           })()}
                                         </span>
                                       )}
@@ -553,8 +571,8 @@ export function ConfirmedDealViewer({ event, isOpen, onClose, onComplete }: Conf
                             <div>
                               <Label>Role</Label>
                               <Select
-                                value={participant.role}
-                                onValueChange={(value) => updateParticipant(index, "role", value)}
+                                value={participant.partner_role}
+                                onValueChange={(value) => updateParticipant(index, "partner_role", value)}
                                 disabled={isLumino}
                               >
                                 <SelectTrigger>
@@ -562,8 +580,10 @@ export function ConfirmedDealViewer({ event, isOpen, onClose, onComplete }: Conf
                                 </SelectTrigger>
                                 <SelectContent>
                                   <SelectItem value="Partner">Partner</SelectItem>
+                                  <SelectItem value="Sales Rep">Sales Rep</SelectItem>
+                                  <SelectItem value="Referral">Referral</SelectItem>
                                   <SelectItem value="ISO">ISO</SelectItem>
-                                  <SelectItem value="Referrer">Referrer</SelectItem>
+                                  <SelectItem value="Agent">Agent</SelectItem>
                                   <SelectItem value="Company">Company</SelectItem>
                                   <SelectItem value="Investor">Investor</SelectItem>
                                   <SelectItem value="Fund I">Fund I</SelectItem>
@@ -612,15 +632,15 @@ export function ConfirmedDealViewer({ event, isOpen, onClose, onComplete }: Conf
                             <div>
                               <Label className="text-muted-foreground">Partner</Label>
                               <p className="font-medium">
-                                {isLumino ? "Lumino (Company)" : selectedPartner ? selectedPartner.name : participantId}
+                                {isLumino ? "Lumino (Company)" : participant.partner_name || (selectedPartner ? selectedPartner.name : participantId)}
                               </p>
-                              {!isLumino && selectedPartner && (
-                                <p className="text-xs text-muted-foreground">{selectedPartner.email}</p>
+                              {!isLumino && (participant.partner_email || selectedPartner?.email) && (
+                                <p className="text-xs text-muted-foreground">{participant.partner_email || selectedPartner?.email}</p>
                               )}
                             </div>
                             <div>
                               <Label className="text-muted-foreground">Role</Label>
-                              <Badge variant="outline">{participant.role}</Badge>
+                              <Badge variant="outline">{participant.partner_role}</Badge>
                             </div>
                             <div>
                               <Label className="text-muted-foreground">Split</Label>

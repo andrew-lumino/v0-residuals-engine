@@ -1,19 +1,23 @@
 import { createClient } from "@/lib/db/server"
 import { logAction, logDebug } from "@/lib/utils/history"
 import { type NextRequest, NextResponse } from "next/server"
+import { normalizeParticipants } from "@/lib/utils/normalize-participant"
 
 export async function POST(request: NextRequest) {
   const requestId = crypto.randomUUID()
 
   try {
     const body = await request.json()
-    const { eventIds, mid, participants, payout_type } = body
+    const { eventIds, mid, participants: rawParticipants, payout_type } = body
 
-    if (!participants || participants.length === 0) {
+    if (!rawParticipants || rawParticipants.length === 0) {
       return NextResponse.json({ success: false, error: "At least one participant is required" }, { status: 400 })
     }
 
-    const totalSplit = participants.reduce((sum: number, p: { split_pct: number }) => sum + p.split_pct, 0)
+    // Normalize all participant fields to use consistent naming
+    const participants = normalizeParticipants(rawParticipants)
+
+    const totalSplit = participants.reduce((sum, p) => sum + p.split_pct, 0)
     if (totalSplit < 80 || totalSplit > 105) {
       return NextResponse.json(
         { success: false, error: `Total split (${totalSplit}%) should be between 80% and 105%` },
@@ -25,7 +29,12 @@ export async function POST(request: NextRequest) {
     const { data: existingDeal } = await supabase.from("deals").select("*").eq("mid", mid).single()
 
     let dealId: string
-    const dealUniqueId = `deal_${crypto.randomUUID()}`
+    // Use consistent short deal_id format: deal_ + 8 hex chars
+    const dealUniqueId = `deal_${crypto.randomUUID().slice(0, 8)}`
+
+    // Get the primary partner name (first non-Lumino participant)
+    const primaryPartner = participants.find(p => p.partner_airtable_id !== "lumino-company")
+    const assignedAgentName = primaryPartner?.partner_name || participants[0]?.partner_name || null
 
     if (existingDeal) {
       const previousData = {
@@ -39,7 +48,7 @@ export async function POST(request: NextRequest) {
         .update({
           participants_json: participants,
           payout_type,
-          assigned_agent_name: participants[0].name,
+          assigned_agent_name: assignedAgentName,
           updated_at: new Date().toISOString(),
         })
         .eq("id", existingDeal.id)
@@ -63,7 +72,7 @@ export async function POST(request: NextRequest) {
         entityName: mid,
         description: `Updated deal participants for MID ${mid}`,
         previousData,
-        newData: { participants_json: participants, payout_type, assigned_agent_name: participants[0].name },
+        newData: { participants_json: participants, payout_type, assigned_agent_name: assignedAgentName },
         requestId,
       })
     } else {
@@ -74,7 +83,7 @@ export async function POST(request: NextRequest) {
           mid,
           participants_json: participants,
           payout_type,
-          assigned_agent_name: participants[0].name,
+          assigned_agent_name: assignedAgentName,
           assigned_at: new Date().toISOString(),
         })
         .select()
@@ -111,8 +120,8 @@ export async function POST(request: NextRequest) {
       .update({
         assignment_status: "pending",
         deal_id: dealId,
-        assigned_agent_id: participants[0].partner_id,
-        assigned_agent_name: participants[0].name,
+        assigned_agent_id: primaryPartner?.partner_airtable_id || participants[0]?.partner_airtable_id,
+        assigned_agent_name: assignedAgentName,
         payout_type,
         updated_at: new Date().toISOString(),
       })
@@ -224,10 +233,11 @@ export async function GET(request: NextRequest) {
               participants_json: firstItem.agent_name
                 ? [
                     {
-                      partner_id: null,
+                      partner_airtable_id: null,
                       partner_name: firstItem.agent_name,
+                      partner_role: null,
+                      partner_email: null,
                       split_pct: firstItem.agent_split || 50,
-                      name: firstItem.agent_name,
                     },
                   ]
                 : [],

@@ -56,11 +56,13 @@ interface UnassignedEvent {
   volume: number
   fees: number
   adjustments: number
+  chargebacks: number
   raw_data: any
   assignment_status: string
   payout_month: string | null
   assigned_agent_name?: string
   payout_type?: string
+  payout_amount?: number
 }
 
 interface Batch {
@@ -639,10 +641,7 @@ export const UnassignedQueue = forwardRef<UnassignedQueueRef, UnassignedQueuePro
                       </>
                     )}
                     {activeTab === "confirmed" && (
-                      <StatusBadge status="confirmed">
-                        <CheckCircle2 className="h-3 w-3 mr-1" />
-                        Confirmed
-                      </StatusBadge>
+                      <StatusBadge status="confirmed" />
                     )}
                     <Button
                       variant="ghost"

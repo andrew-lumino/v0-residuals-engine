@@ -1,8 +1,9 @@
 import { createClient } from "@/lib/db/server"
 import { type NextRequest, NextResponse } from "next/server"
 import { logActionAsync } from "@/lib/utils/history"
+import { normalizeParticipant } from "@/lib/utils/normalize-participant"
 
-export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
     const supabase = await createClient()
@@ -29,7 +30,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 }
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+  const requestId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`
 
   try {
     const { id } = await params
@@ -78,8 +79,113 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   }
 }
 
-export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+// PUT handler - used by EditPendingDealModal to update participants
+// This also updates the associated payouts to match the new participants
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const requestId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`
+
+  try {
+    const { id } = await params
+    const body = await request.json()
+    const supabase = await createClient()
+
+    // Get the deal before update
+    const { data: dealBefore, error: fetchError } = await supabase
+      .from("deals")
+      .select("*")
+      .eq("id", id)
+      .single()
+
+    if (fetchError || !dealBefore) {
+      return NextResponse.json({ success: false, error: "Deal not found" }, { status: 404 })
+    }
+
+    // Normalize participants from the request body
+    // Frontend sends { participants: [...] } but DB needs { participants_json: [...] }
+    const rawParticipants = body.participants || body.participants_json || []
+    const normalizedParticipants = rawParticipants.map(normalizeParticipant)
+
+    // Update the deal with normalized participants
+    const { data: updatedDeal, error: updateError } = await supabase
+      .from("deals")
+      .update({
+        participants_json: normalizedParticipants,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id)
+      .select()
+      .single()
+
+    if (updateError) {
+      return NextResponse.json({ success: false, error: updateError.message }, { status: 500 })
+    }
+
+    // CRITICAL: Also update the associated payouts to match the new participants
+    // First, delete existing payouts for this deal
+    const { error: deletePayoutsError } = await supabase
+      .from("payouts")
+      .delete()
+      .eq("deal_id", id)
+
+    if (deletePayoutsError) {
+      console.error("[PUT deals] Error deleting old payouts:", deletePayoutsError)
+    }
+
+    // Then create new payouts based on the updated participants
+    if (normalizedParticipants.length > 0 && dealBefore.csv_data_id) {
+      const newPayouts = normalizedParticipants.map((participant: ReturnType<typeof normalizeParticipant>) => ({
+        deal_id: id,
+        csv_data_id: dealBefore.csv_data_id,
+        partner_airtable_id: participant.partner_airtable_id,
+        partner_name: participant.partner_name,
+        partner_role: participant.partner_role,
+        split_pct: participant.split_pct,
+        amount: dealBefore.total_amount
+          ? Number(dealBefore.total_amount) * (participant.split_pct / 100)
+          : 0,
+        status: dealBefore.status === "confirmed" ? "confirmed" : "pending",
+        residual_month: dealBefore.residual_month,
+      }))
+
+      const { error: insertPayoutsError } = await supabase
+        .from("payouts")
+        .insert(newPayouts)
+
+      if (insertPayoutsError) {
+        console.error("[PUT deals] Error creating new payouts:", insertPayoutsError)
+        // Don't fail the whole request, deal was updated successfully
+      }
+    }
+
+    // Parse participants_json if it's a string (for response)
+    if (updatedDeal && typeof updatedDeal.participants_json === "string") {
+      try {
+        updatedDeal.participants_json = JSON.parse(updatedDeal.participants_json)
+      } catch {
+        updatedDeal.participants_json = []
+      }
+    }
+
+    logActionAsync({
+      actionType: "update",
+      entityType: "deal",
+      entityId: id,
+      entityName: dealBefore?.mid || id,
+      description: `Updated deal participants for ${dealBefore?.mid || id}`,
+      previousData: dealBefore,
+      newData: updatedDeal,
+      requestId,
+    })
+
+    return NextResponse.json({ success: true, data: updatedDeal })
+  } catch (error) {
+    console.error("[PUT deals] Error:", error)
+    return NextResponse.json({ success: false, error: "Internal server error" }, { status: 500 })
+  }
+}
+
+export async function DELETE(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const requestId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`
 
   try {
     const { id } = await params

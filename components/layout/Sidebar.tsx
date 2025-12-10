@@ -2,7 +2,6 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { UserButton } from "@clerk/nextjs"
 import { cn } from "@/lib/utils"
 import {
   LayoutDashboard,
@@ -17,6 +16,7 @@ import {
   History,
   Calculator,
   SlidersHorizontal,
+  User,
 } from "lucide-react"
 
 const navigation = [
@@ -109,14 +109,12 @@ export function Sidebar() {
       </div>
       <div className="p-4 border-t">
         <div className="flex items-center gap-3 px-2">
-          <UserButton
-            afterSignOutUrl="/sign-in"
-            appearance={{
-              elements: {
-                avatarBox: "h-8 w-8",
-              },
-            }}
-          />
+          <div className="flex items-center gap-2">
+            <div className="h-8 w-8 rounded-full bg-primary/20 flex items-center justify-center">
+              <User className="h-4 w-4 text-primary" />
+            </div>
+            <span className="text-xs text-muted-foreground">Dev Mode</span>
+          </div>
         </div>
       </div>
     </div>

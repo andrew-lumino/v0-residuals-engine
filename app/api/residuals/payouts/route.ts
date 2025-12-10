@@ -97,6 +97,7 @@ export async function GET(request: NextRequest) {
     allPayouts.forEach((row: any) => {
       const partnerId = row.partner_airtable_id
       const partnerName = row.partner_name || "Unknown Partner"
+      const partnerRole = row.partner_role || "Partner"
       const amount = Number.parseFloat(row.partner_payout_amount) || 0
       const isPaid = row.paid_status === "paid"
 
@@ -104,17 +105,21 @@ export async function GET(request: NextRequest) {
         summaryMap.set(partnerId, {
           partner_airtable_id: partnerId,
           partner_name: partnerName,
+          partner_role: partnerRole,
           merchant_count: 0,
           total_payout: 0,
           paid_count: 0,
           unpaid_count: 0,
-          // Using Set to count unique MIDs
+          // Using Set to count unique MIDs and roles
           _mids: new Set(),
+          _roles: new Set(),
         } as any)
       }
 
       const summary = summaryMap.get(partnerId)!
       summary.total_payout += amount
+      // @ts-ignore - internal set for counting roles
+      summary._roles.add(partnerRole)
 
       if (isPaid) {
         summary.paid_count += 1
@@ -130,6 +135,7 @@ export async function GET(request: NextRequest) {
     const summaries: PayoutSummary[] = Array.from(summaryMap.values()).map((s: any) => ({
       partner_airtable_id: s.partner_airtable_id,
       partner_name: s.partner_name,
+      partner_role: s._roles.size > 1 ? "Various" : s.partner_role,
       merchant_count: s._mids.size,
       total_payout: s.total_payout,
       paid_count: s.paid_count,

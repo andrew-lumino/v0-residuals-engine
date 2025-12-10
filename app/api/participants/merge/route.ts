@@ -25,9 +25,10 @@ export async function POST(request: NextRequest) {
     let dealsUpdated = 0
 
     // 1. Update payouts table
-    const { data: affectedPayouts } = await supabase.from("payouts").select("id").eq("partner_airtable_id", sourceId)
+    const { data: payoutsToUpdate } = await supabase.from("payouts").select("id").eq("partner_airtable_id", sourceId)
+    const payoutsCount = payoutsToUpdate?.length || 0
 
-    const { error: payoutsError, count: payoutsCount } = await supabase
+    const { error: payoutsError } = await supabase
       .from("payouts")
       .update({
         partner_airtable_id: targetId,
@@ -35,7 +36,6 @@ export async function POST(request: NextRequest) {
         partner_role: targetRole || null,
       })
       .eq("partner_airtable_id", sourceId)
-      .select("*", { count: "exact", head: true })
 
     if (payoutsError) {
       await logDebug(
@@ -54,78 +54,57 @@ export async function POST(request: NextRequest) {
     payoutsUpdated = payoutsCount || 0
 
     // 2. Update deals table participants_json
-    // First, find all deals that have the source participant
+    // Search for deals with source participant using both legacy and canonical field names
     const { data: affectedDeals } = await supabase
       .from("deals")
       .select("id, deal_id, participants_json")
       .filter("participants_json", "cs", `[{"partner_id":"${sourceId}"}]`)
 
-    if (affectedDeals && affectedDeals.length > 0) {
-      for (const deal of affectedDeals) {
-        const participants = deal.participants_json || []
-        const updatedParticipants = participants.map((p: any) => {
-          if (p.partner_id === sourceId || p.partner_airtable_id === sourceId) {
-            return {
-              ...p,
-              partner_id: targetId,
-              partner_airtable_id: targetId,
-              partner_name: targetName,
-              name: targetName,
-              partner_email: targetEmail || p.partner_email,
-              partner_role: targetRole || p.partner_role,
-              role: targetRole || p.role,
-            }
-          }
-          return p
-        })
-
-        const { error: dealError } = await supabase
-          .from("deals")
-          .update({ participants_json: updatedParticipants })
-          .eq("id", deal.id)
-
-        if (!dealError) {
-          dealsUpdated++
-        }
-      }
-    }
-
-    // Also check with different JSON structure
     const { data: affectedDeals2 } = await supabase
       .from("deals")
       .select("id, deal_id, participants_json")
       .filter("participants_json", "cs", `[{"partner_airtable_id":"${sourceId}"}]`)
 
-    if (affectedDeals2 && affectedDeals2.length > 0) {
-      for (const deal of affectedDeals2) {
-        // Skip if already processed
-        if (affectedDeals?.some((d) => d.id === deal.id)) continue
+    const { data: affectedDeals3 } = await supabase
+      .from("deals")
+      .select("id, deal_id, participants_json")
+      .filter("participants_json", "cs", `[{"agent_id":"${sourceId}"}]`)
 
-        const participants = deal.participants_json || []
-        const updatedParticipants = participants.map((p: any) => {
-          if (p.partner_id === sourceId || p.partner_airtable_id === sourceId) {
-            return {
-              ...p,
-              partner_id: targetId,
-              partner_airtable_id: targetId,
-              partner_name: targetName,
-              name: targetName,
-              partner_email: targetEmail || p.partner_email,
-              partner_role: targetRole || p.partner_role,
-              role: targetRole || p.role,
-            }
-          }
-          return p
-        })
+    // Combine all affected deals, removing duplicates
+    const allAffectedDeals = [
+      ...(affectedDeals || []),
+      ...(affectedDeals2 || []),
+      ...(affectedDeals3 || []),
+    ]
+    const processedDealIds = new Set<string>()
 
-        const { error: dealError } = await supabase
-          .from("deals")
-          .update({ participants_json: updatedParticipants })
-          .eq("id", deal.id)
+    for (const deal of allAffectedDeals) {
+      // Skip if already processed
+      if (processedDealIds.has(deal.id)) continue
+      processedDealIds.add(deal.id)
 
-        if (!dealError) {
-          dealsUpdated++
+      const participants = deal.participants_json || []
+      // Normalize all participants to canonical format and update source to target
+      const updatedParticipants = participants.map((p: any) => {
+        const partnerId = p.partner_airtable_id || p.partner_id || p.agent_id
+        const isSourceParticipant = partnerId === sourceId
+
+        return {
+          partner_airtable_id: isSourceParticipant ? targetId : partnerId,
+          partner_name: isSourceParticipant ? targetName : (p.partner_name || p.name),
+          partner_email: isSourceParticipant ? (targetEmail || p.partner_email || p.email) : (p.partner_email || p.email),
+          partner_role: isSourceParticipant ? (targetRole || p.partner_role || p.role) : (p.partner_role || p.role),
+          split_pct: p.split_pct || 0,
         }
+      })
+
+      const { error: dealError } = await supabase
+        .from("deals")
+        .update({ participants_json: updatedParticipants })
+        .eq("id", deal.id)
+
+      if (!dealError) {
+        dealsUpdated++
       }
     }
 

@@ -8,13 +8,14 @@ export type AccountAssignmentStatus = "available" | "assigned" | "confirmed"
 export type BoardingPlatform = "Nuvei" | "Fiserv" | "Shift4" | "Cardpointe"
 
 // Participant structure in deals.participants_json
+// IMPORTANT: These field names MUST match the database format
 export interface DealParticipant {
-  partner_id: string // Airtable record ID
-  name: string
-  email: string | null
-  role: PartnerRole
+  partner_airtable_id: string | null  // Airtable record ID - THE KEY IDENTIFIER
+  partner_name: string | null
+  partner_email?: string | null
+  partner_role: PartnerRole | string | null
   split_pct: number // 0-100
-  amount?: number // Calculated, optional
+  amount?: number // Calculated payout amount, optional
 }
 
 // csv_data table
@@ -96,6 +97,21 @@ export interface Payout {
   is_legacy_import: boolean
 }
 
+// partner_sync table (Airtable source)
+export interface PartnerSync {
+  id: string
+  airtable_record_id: string
+  name: string
+  email: string | null
+  role: string | null
+  default_split_pct: number | null
+  last_synced_at: string | null
+  created_at: string
+  updated_at: string
+  is_active: boolean
+  notes: string | null
+}
+
 // Useful computed types
 export interface EventWithDeal extends CsvData {
   deal: Deal | null
@@ -104,6 +120,7 @@ export interface EventWithDeal extends CsvData {
 export interface PayoutSummary {
   partner_airtable_id: string
   partner_name: string
+  partner_role?: string // "Various" if multiple roles
   merchant_count: number // COUNT(DISTINCT mid)
   total_payout: number
   paid_count: number

@@ -55,13 +55,16 @@ interface Deal {
   merchant_name: string | null
   payout_type: string
   participants_json: Array<{
-    partner_id: string
-    partner_name: string
-    name: string
-    role: string
+    partner_airtable_id: string | null
+    partner_name: string | null
+    partner_email?: string | null
+    partner_role: string | null
     split_pct: number
+    // Legacy field names for backward compatibility
+    partner_id?: string
+    name?: string
+    role?: string
     agent_id?: string
-    partner_role?: string
   }>
   is_pending?: boolean
   pending_event_ids?: string[]
@@ -81,10 +84,9 @@ interface Adjustment {
 }
 
 interface AdjustmentSplit {
-  partner_id: string
+  partner_airtable_id: string
   partner_name: string
-  name: string
-  role: string
+  partner_role: string
   old_split: number
   new_split: number
   adjustment: number
@@ -132,9 +134,9 @@ interface HistoryItem {
 // Interface for managing adjustment participants in the dialog
 interface AdjustmentParticipant {
   index: number // Add unique index for reliable identification
-  partner_id: string
+  partner_airtable_id: string
   partner_name: string
-  role: string
+  partner_role: string
   old_split_pct: number
   new_split_pct: number
 }
@@ -424,9 +426,9 @@ export default function AdjustmentsPage() {
     setAdjustmentParticipants(
       (deal.participants_json || []).map((p, idx) => ({
         index: idx,
-        partner_id: p.partner_id || p.agent_id || "",
+        partner_airtable_id: p.partner_airtable_id || p.partner_id || p.agent_id || "",
         partner_name: p.partner_name || p.name || "",
-        role: p.role || p.partner_role || "Partner",
+        partner_role: p.partner_role || p.role || "Partner",
         old_split_pct: p.split_pct,
         new_split_pct: p.split_pct,
       })),
@@ -444,7 +446,7 @@ export default function AdjustmentsPage() {
   const updateSplit = (partnerId: string, newSplit: number) => {
     setAdjustmentParticipants((participants) =>
       participants.map((p) => {
-        if (p.partner_id === partnerId) {
+        if (p.partner_airtable_id === partnerId) {
           return { ...p, new_split_pct: newSplit }
         }
         return p
@@ -473,15 +475,15 @@ export default function AdjustmentsPage() {
 
     setSubmitting(true)
     try {
-      // The API looks for partner_airtable_id, agent_id, airtable_id, or id - NOT partner_id
+      // Build updated participants_json with normalized field names
+      // Include fallback fields for API compatibility
       const updatedParticipants = adjustmentParticipants.map((p) => ({
-        partner_airtable_id: p.partner_id, // API expects this field name
-        agent_id: p.partner_id, // Fallback field the API also checks
-        partner_id: p.partner_id,
+        partner_airtable_id: p.partner_airtable_id,
+        agent_id: p.partner_airtable_id, // Fallback field the API also checks
         partner_name: p.partner_name,
-        name: p.partner_name,
-        role: p.role,
-        partner_role: p.role,
+        name: p.partner_name, // Fallback
+        partner_role: p.partner_role,
+        role: p.partner_role, // Fallback
         split_pct: p.new_split_pct,
       }))
 
@@ -516,7 +518,7 @@ export default function AdjustmentsPage() {
               },
               new_data: {
                 deal_id: selectedDeal.id, // Use selectedDeal.id (UUID)
-                participant_id: participant.partner_id,
+                participant_id: participant.partner_airtable_id,
                 participant_name: participant.partner_name,
                 old_split_pct: participant.old_split_pct,
                 new_split_pct: participant.new_split_pct,
@@ -632,9 +634,9 @@ export default function AdjustmentsPage() {
     const maxIndex = adjustmentParticipants.length > 0 ? Math.max(...adjustmentParticipants.map((p) => p.index)) : -1
     const newParticipant: AdjustmentParticipant = {
       index: maxIndex + 1,
-      partner_id: "",
+      partner_airtable_id: "",
       partner_name: "",
-      role: "Partner",
+      partner_role: "Partner",
       old_split_pct: 0,
       new_split_pct: 0,
     }
@@ -649,13 +651,13 @@ export default function AdjustmentsPage() {
     setAdjustmentParticipants((prev) =>
       prev.map((p) => {
         if (p.index === index) {
-          if (field === "partner_id") {
+          if (field === "partner_airtable_id") {
             const selectedPartner = availablePartners.find((partner) => partner.id === value)
             return {
               ...p,
-              partner_id: value,
+              partner_airtable_id: value,
               partner_name: selectedPartner?.name || "",
-              role: selectedPartner?.role || p.role, // Default to existing role if partner has no role
+              partner_role: p.partner_role, // Keep existing role
             }
           }
           return { ...p, [field]: value }
@@ -912,7 +914,7 @@ export default function AdjustmentsPage() {
                       >
                         <div className="col-span-2">
                           <p className="font-medium">{participant.name}</p>
-                          <p className="text-xs text-muted-foreground font-mono">{participant.id}</p>
+                          <p className="text-xs text-muted-foreground">{participant.email || "No email"}</p>
                         </div>
                         <div>
                           <Badge variant="outline" className="capitalize">
@@ -1076,11 +1078,11 @@ export default function AdjustmentsPage() {
                               <span
                                 className={cn(
                                   "font-medium",
-                                  item.adjustment_amount >= 0 ? "text-green-600" : "text-red-600",
+                                  (item.adjustment_amount ?? 0) >= 0 ? "text-green-600" : "text-red-600",
                                 )}
                               >
-                                {item.adjustment_amount >= 0 ? "+" : ""}
-                                <MoneyDisplay amount={item.adjustment_amount!} />
+                                {(item.adjustment_amount ?? 0) >= 0 ? "+" : ""}
+                                <MoneyDisplay amount={item.adjustment_amount ?? 0} />
                               </span>
                             </div>
                             {item.note && <p className="mt-2 text-sm text-muted-foreground">{item.note}</p>}
@@ -1152,9 +1154,9 @@ export default function AdjustmentsPage() {
                         {!participant.partner_name ? (
                           <div className="space-y-2">
                             <Select
-                              value={participant.partner_id}
+                              value={participant.partner_airtable_id}
                               onValueChange={(value) =>
-                                updateParticipantDetails(participant.index, "partner_id", value)
+                                updateParticipantDetails(participant.index, "partner_airtable_id", value)
                               }
                             >
                               <SelectTrigger className="w-full">
@@ -1193,8 +1195,8 @@ export default function AdjustmentsPage() {
                               </SelectContent>
                             </Select>
                             <Select
-                              value={participant.role}
-                              onValueChange={(value) => updateParticipantDetails(participant.index, "role", value)}
+                              value={participant.partner_role}
+                              onValueChange={(value) => updateParticipantDetails(participant.index, "partner_role", value)}
                             >
                               <SelectTrigger className="w-full">
                                 <SelectValue placeholder="Select role" />
@@ -1212,9 +1214,27 @@ export default function AdjustmentsPage() {
                             </Select>
                           </div>
                         ) : (
-                          <div>
+                          <div className="space-y-2">
                             <p className="font-medium">{participant.partner_name}</p>
-                            <p className="text-xs capitalize text-muted-foreground">{participant.role}</p>
+                            <Select
+                              value={participant.partner_role}
+                              onValueChange={(value) => updateParticipantDetails(participant.index, "partner_role", value)}
+                            >
+                              <SelectTrigger className="w-full h-8">
+                                <SelectValue placeholder="Select role" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="Partner">Partner</SelectItem>
+                                <SelectItem value="Sales Rep">Sales Rep</SelectItem>
+                                <SelectItem value="Referral">Referral</SelectItem>
+                                <SelectItem value="ISO">ISO</SelectItem>
+                                <SelectItem value="Agent">Agent</SelectItem>
+                                <SelectItem value="Investor">Investor</SelectItem>
+                                <SelectItem value="Fund I">Fund I</SelectItem>
+                                <SelectItem value="Fund II">Fund II</SelectItem>
+                                <SelectItem value="Company">Company</SelectItem>
+                              </SelectContent>
+                            </Select>
                           </div>
                         )}
                       </div>

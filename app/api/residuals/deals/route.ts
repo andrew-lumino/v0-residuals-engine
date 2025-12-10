@@ -2,6 +2,7 @@ import { createClient } from "@/lib/db/server"
 import { type NextRequest, NextResponse } from "next/server"
 import type { ApiResponse } from "@/lib/types/api"
 import type { Deal, DealParticipant } from "@/lib/types/database"
+import { normalizeParticipants } from "@/lib/utils/normalize-participant"
 
 export async function POST(request: NextRequest) {
   try {
@@ -9,7 +10,7 @@ export async function POST(request: NextRequest) {
     const {
       eventIds,
       mid,
-      participants,
+      participants: rawParticipants,
       payout_type,
     }: {
       eventIds: string[]
@@ -19,9 +20,12 @@ export async function POST(request: NextRequest) {
     } = body
 
     // Validate participants
-    if (!participants || participants.length === 0) {
+    if (!rawParticipants || rawParticipants.length === 0) {
       return NextResponse.json({ success: false, error: "At least one participant is required" }, { status: 400 })
     }
+
+    // Normalize participant field names to canonical format
+    const participants = normalizeParticipants(rawParticipants)
 
     // Validate split percentages
     const totalSplit = participants.reduce((sum, p) => sum + p.split_pct, 0)
@@ -38,7 +42,12 @@ export async function POST(request: NextRequest) {
     const { data: existingDeal } = await supabase.from("deals").select("*").eq("mid", mid).single()
 
     let dealId: string
-    const dealUniqueId = `deal_${crypto.randomUUID()}`
+    // Use consistent short deal_id format: deal_ + 8 hex chars (matches other endpoints)
+    const dealUniqueId = `deal_${crypto.randomUUID().slice(0, 8)}`
+
+    // Get primary partner (first non-Lumino participant)
+    const primaryPartner = participants.find(p => p.partner_airtable_id !== "lumino-company")
+    const assignedAgentName = primaryPartner?.partner_name || participants[0]?.partner_name || null
 
     if (existingDeal) {
       // Update existing deal
@@ -47,7 +56,7 @@ export async function POST(request: NextRequest) {
         .update({
           participants_json: participants,
           payout_type,
-          assigned_agent_name: participants[0].name,
+          assigned_agent_name: assignedAgentName,
           updated_at: new Date().toISOString(),
         })
         .eq("id", existingDeal.id)
@@ -66,7 +75,7 @@ export async function POST(request: NextRequest) {
           mid,
           participants_json: participants,
           payout_type,
-          assigned_agent_name: participants[0].name,
+          assigned_agent_name: assignedAgentName,
           assigned_at: new Date().toISOString(),
         })
         .select()
@@ -88,8 +97,8 @@ export async function POST(request: NextRequest) {
       .update({
         assignment_status: "pending",
         deal_id: dealId,
-        assigned_agent_id: participants[0].partner_id,
-        assigned_agent_name: participants[0].name,
+        assigned_agent_id: primaryPartner?.partner_airtable_id || participants[0]?.partner_airtable_id,
+        assigned_agent_name: assignedAgentName,
         payout_type,
         updated_at: new Date().toISOString(),
       })

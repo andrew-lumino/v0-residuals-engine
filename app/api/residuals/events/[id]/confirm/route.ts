@@ -1,7 +1,8 @@
 import { createClient } from "@/lib/db/server"
 import { type NextRequest, NextResponse } from "next/server"
+import { normalizeParticipant } from "@/lib/utils/normalize-participant"
 
-export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
     const supabase = await createClient()
@@ -35,27 +36,31 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     // Calculate net residual
     const netResidual = (event.volume || 0) - (event.fees || 0) - (event.adjustments || 0) - (event.chargebacks || 0)
 
-    // Create payouts for each participant
-    const payouts = deal.participants_json.map((participant: any) => ({
-      csv_data_id: event.id,
-      deal_id: deal.deal_id,
-      payout_month: event.payout_month,
-      payout_date: event.date,
-      mid: event.mid,
-      merchant_name: event.merchant_name,
-      payout_type: event.payout_type,
-      volume: event.volume || 0,
-      fees: event.fees || 0,
-      adjustments: event.adjustments || 0,
-      chargebacks: event.chargebacks || 0,
-      net_residual: netResidual,
-      partner_airtable_id: participant.partner_id,
-      partner_role: participant.role,
-      partner_split_pct: participant.split_pct,
-      partner_payout_amount: netResidual * (participant.split_pct / 100),
-      assignment_status: "confirmed",
-      paid_status: "unpaid",
-    }))
+    // Create payouts for each participant (normalize field names for backwards compatibility)
+    const payouts = deal.participants_json.map((rawParticipant: unknown) => {
+      const participant = normalizeParticipant(rawParticipant as Record<string, unknown>)
+      return {
+        csv_data_id: event.id,
+        deal_id: deal.deal_id,
+        payout_month: event.payout_month,
+        payout_date: event.date,
+        mid: event.mid,
+        merchant_name: event.merchant_name,
+        payout_type: event.payout_type,
+        volume: event.volume || 0,
+        fees: event.fees || 0,
+        adjustments: event.adjustments || 0,
+        chargebacks: event.chargebacks || 0,
+        net_residual: netResidual,
+        partner_airtable_id: participant.partner_airtable_id,
+        partner_name: participant.partner_name,
+        partner_role: participant.partner_role,
+        partner_split_pct: participant.split_pct,
+        partner_payout_amount: netResidual * (participant.split_pct / 100),
+        assignment_status: "confirmed",
+        paid_status: "unpaid",
+      }
+    })
 
     // Insert payouts
     const { error: payoutError } = await supabase.from("payouts").insert(payouts)

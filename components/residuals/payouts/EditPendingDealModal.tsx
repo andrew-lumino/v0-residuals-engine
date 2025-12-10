@@ -62,10 +62,10 @@ interface Deal {
 
 interface Event {
   id: string
-  mid: string
-  merchant_name: string
+  mid: string | null
+  merchant_name: string | null
   volume: number
-  payout_amount: number
+  payout_amount?: number
   fees?: number
   payout_type?: string
   assignment_status?: string

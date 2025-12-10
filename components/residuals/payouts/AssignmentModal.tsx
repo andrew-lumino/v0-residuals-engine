@@ -18,12 +18,12 @@ import { toast } from "@/components/ui/use-toast"
 
 interface UnassignedEvent {
   id: string
-  mid: string
-  merchant_name: string
+  mid: string | null
+  merchant_name: string | null
   volume: number
   fees: number
-  date: string
-  payout_month: string
+  date: string | null
+  payout_month: string | null
   adjustments: number
   chargebacks: number
   batch_id: string
@@ -58,7 +58,7 @@ interface AssignmentModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onComplete?: () => void
-  bulkEventIds?: number[]
+  bulkEventIds?: string[]
 }
 
 interface NewDealState {

@@ -54,7 +54,8 @@ export async function POST(request: NextRequest) {
     if (assignment_type === "new_deal" && new_deal) {
       console.log("[assign-event] Creating/updating deal for MID:", new_deal.mid)
 
-      const generatedDealId = `deal_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`
+      // Use consistent short deal_id format: deal_ + 8 hex chars
+      const generatedDealId = `deal_${crypto.randomUUID().slice(0, 8)}`
 
       const dealPayload = {
         deal_id: generatedDealId,

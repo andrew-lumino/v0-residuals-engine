@@ -124,6 +124,7 @@ export function PayoutsDetailedView({ initialPayouts, total, stats }: Props) {
   const [monthFilter, setMonthFilter] = useState("all")
   const [statusFilter, setStatusFilter] = useState("all")
   const [typeFilter, setTypeFilter] = useState("all")
+  const [roleFilter, setRoleFilter] = useState("all")
   const [loading, setLoading] = useState(false)
   const [hasMore, setHasMore] = useState(initialPayouts.length < total)
   const [allMonths, setAllMonths] = useState<string[]>([])
@@ -276,8 +277,12 @@ export function PayoutsDetailedView({ initialPayouts, total, stats }: Props) {
       filtered = filtered.filter((p) => p.payout_type === typeFilter)
     }
 
+    if (roleFilter !== "all") {
+      filtered = filtered.filter((p) => p.partner_role === roleFilter)
+    }
+
     setFilteredPayouts(filtered)
-  }, [searchQuery, monthFilter, statusFilter, typeFilter, payouts])
+  }, [searchQuery, monthFilter, statusFilter, typeFilter, roleFilter, payouts])
 
   const sortedPayouts = [...filteredPayouts].sort((a, b) => {
     let aVal: any = a[sortField]
@@ -655,6 +660,24 @@ export function PayoutsDetailedView({ initialPayouts, total, stats }: Props) {
                       <SelectItem value="bonus">Bonus</SelectItem>
                       <SelectItem value="clawback">Clawback</SelectItem>
                       <SelectItem value="adjustment">Adjustment</SelectItem>
+                    </SelectContent>
+                  </Select>
+
+                  <Select value={roleFilter} onValueChange={setRoleFilter}>
+                    <SelectTrigger className="w-[140px]">
+                      <SelectValue placeholder="All Roles" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Roles</SelectItem>
+                      <SelectItem value="Partner">Partner</SelectItem>
+                      <SelectItem value="Sales Rep">Sales Rep</SelectItem>
+                      <SelectItem value="Referral">Referral</SelectItem>
+                      <SelectItem value="ISO">ISO</SelectItem>
+                      <SelectItem value="Agent">Agent</SelectItem>
+                      <SelectItem value="Investor">Investor</SelectItem>
+                      <SelectItem value="Fund I">Fund I</SelectItem>
+                      <SelectItem value="Fund II">Fund II</SelectItem>
+                      <SelectItem value="Company">Company</SelectItem>
                     </SelectContent>
                   </Select>
 

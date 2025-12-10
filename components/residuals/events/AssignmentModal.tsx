@@ -89,15 +89,15 @@ export function AssignmentModal({ isOpen, onClose, events, onSave }: AssignmentM
   }
 
   const handleAddParticipant = (partner: PartnerSync) => {
-    if (participants.some((p) => p.partner_id === partner.airtable_record_id)) {
+    if (participants.some((p) => p.partner_airtable_id === partner.airtable_record_id)) {
       return // Already added
     }
 
     const newParticipant: DealParticipant = {
-      partner_id: partner.airtable_record_id,
-      name: partner.name,
-      email: partner.email,
-      role: (partner.role as PartnerRole) || "Partner",
+      partner_airtable_id: partner.airtable_record_id,
+      partner_name: partner.name,
+      partner_email: partner.email,
+      partner_role: (partner.role as PartnerRole) || "Partner",
       split_pct: partner.default_split_pct || 0,
     }
 
@@ -248,7 +248,7 @@ export function AssignmentModal({ isOpen, onClose, events, onSave }: AssignmentM
                             <Check
                               className={cn(
                                 "mr-2 h-4 w-4",
-                                participants.some((p) => p.partner_id === partner.airtable_record_id)
+                                participants.some((p) => p.partner_airtable_id === partner.airtable_record_id)
                                   ? "opacity-100"
                                   : "opacity-0",
                               )}
@@ -272,9 +272,9 @@ export function AssignmentModal({ isOpen, onClose, events, onSave }: AssignmentM
                 {participants.map((p, index) => (
                   <div key={index} className="flex gap-3 items-start p-3 bg-card border rounded-lg shadow-sm">
                     <div className="flex-1 space-y-1">
-                      <div className="font-medium text-sm">{p.name}</div>
+                      <div className="font-medium text-sm">{p.partner_name}</div>
                       <div className="flex gap-2">
-                        <Select value={p.role} onValueChange={(val) => handleUpdateParticipant(index, "role", val)}>
+                        <Select value={p.partner_role || ""} onValueChange={(val) => handleUpdateParticipant(index, "partner_role", val)}>
                           <SelectTrigger className="h-7 text-xs w-[110px]">
                             <SelectValue />
                           </SelectTrigger>

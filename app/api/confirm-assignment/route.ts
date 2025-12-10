@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/db/server"
 import { type NextRequest, NextResponse } from "next/server"
 import { logActionAsync } from "@/lib/utils/history"
+import { normalizeParticipant } from "@/lib/utils/normalize-participant"
 
 async function syncPayoutsToAirtable(payoutIds: string[]) {
   const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY
@@ -128,7 +129,7 @@ async function syncPayoutsToAirtable(payoutIds: string[]) {
 }
 
 export async function POST(request: NextRequest) {
-  const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+  const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`
 
   try {
     const { event_ids } = await request.json()
@@ -253,8 +254,10 @@ export async function POST(request: NextRequest) {
         const chargebacks = Number.parseFloat(event.chargebacks) || 0
         const netResidual = fees - adjustments - chargebacks
 
-        for (const p of participants) {
-          const splitPct = p.split_pct || 0
+        for (const rawParticipant of participants) {
+          // Normalize field names for backwards compatibility with old data
+          const participant = normalizeParticipant(rawParticipant as Record<string, unknown>)
+          const splitPct = participant.split_pct || 0
           const amount = (netResidual * splitPct) / 100
           payoutRows.push({
             csv_data_id: event.id,
@@ -268,9 +271,9 @@ export async function POST(request: NextRequest) {
             adjustments: adjustments,
             chargebacks: chargebacks,
             net_residual: netResidual,
-            partner_airtable_id: p.partner_airtable_id || p.agent_id,
-            partner_role: p.partner_role || p.role,
-            partner_name: p.partner_name || null,
+            partner_airtable_id: participant.partner_airtable_id,
+            partner_role: participant.partner_role,
+            partner_name: participant.partner_name,
             partner_split_pct: splitPct,
             partner_payout_amount: amount,
             assignment_status: "confirmed",
