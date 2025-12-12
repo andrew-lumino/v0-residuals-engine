@@ -23,7 +23,7 @@ const formatPayoutForAirtable = (payout: any) => {
     "Partner ID": payout.partner_airtable_id || "",
     "Partner Name": cleanString(payout.partner_name),
     "Partner Role": cleanString(payout.partner_role),
-    "Split %": (payout.partner_split_pct || 0) / 100,
+    "Split %": payout.partner_split_pct || 0,
     "Payout Amount": payout.partner_payout_amount || 0,
     Volume: payout.volume || 0,
     Fees: payout.fees || 0,
