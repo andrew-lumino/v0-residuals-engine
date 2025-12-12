@@ -57,6 +57,19 @@ export async function POST(request: NextRequest) {
       // Use consistent short deal_id format: deal_ + 8 hex chars
       const generatedDealId = `deal_${crypto.randomUUID().slice(0, 8)}`
 
+      // Validate that all participants have a valid Airtable ID
+      const invalidParticipants = new_deal.participants.filter(
+        (p: Participant) => !p.agent_id || p.agent_id.trim() === ""
+      )
+      if (invalidParticipants.length > 0) {
+        const names = invalidParticipants.map((p: Participant) => p.agent_name || "Unknown").join(", ")
+        console.error("[assign-event] Missing Airtable IDs for participants:", names)
+        return NextResponse.json(
+          { error: `Missing Airtable IDs for participants: ${names}. Please select valid partners from the dropdown.` },
+          { status: 400 }
+        )
+      }
+
       const dealPayload = {
         deal_id: generatedDealId,
         mid: new_deal.mid,
