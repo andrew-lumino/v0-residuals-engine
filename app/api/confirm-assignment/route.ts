@@ -24,14 +24,19 @@ async function syncPayoutsToAirtable(payoutIds: string[]) {
       return { synced: 0 }
     }
 
-    // Fetch existing Airtable records to check which need create vs update
-    const existingRecords: Map<string, string> = new Map()
+    // Fetch ALL existing Airtable records for these Payout IDs to find duplicates
+    // We need to check EACH payout ID individually to get accurate counts
+    const existingRecords: Map<string, string[]> = new Map() // payoutId -> [airtableRecordIds]
     let offset: string | undefined
+
+    // Build filter formula - check for any of the payout IDs
+    const filterParts = payoutIds.map((id) => `{Payout ID}="${id}"`)
+    const filterFormula = filterParts.length === 1 ? filterParts[0] : `OR(${filterParts.join(",")})`
 
     do {
       const url = new URL(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}`)
       url.searchParams.set("pageSize", "100")
-      url.searchParams.set("filterByFormula", `OR(${payoutIds.map((id) => `{Payout ID}="${id}"`).join(",")})`)
+      url.searchParams.set("filterByFormula", filterFormula)
       if (offset) url.searchParams.set("offset", offset)
 
       const response = await fetch(url.toString(), {
@@ -42,46 +47,74 @@ async function syncPayoutsToAirtable(payoutIds: string[]) {
         const data = await response.json()
         for (const record of data.records || []) {
           const payoutId = record.fields["Payout ID"]
-          if (payoutId) existingRecords.set(payoutId, record.id)
+          if (payoutId) {
+            // Track ALL Airtable records for this payout ID (to detect duplicates)
+            const existing = existingRecords.get(payoutId) || []
+            existing.push(record.id)
+            existingRecords.set(payoutId, existing)
+          }
         }
         offset = data.offset
       } else {
+        console.error("[confirm-assignment] Failed to fetch existing Airtable records")
         break
       }
     } while (offset)
 
-    // Format payouts for Airtable
-    const formatPayout = (payout: any) => ({
-      "Payout ID": payout.id,
-      "Deal ID": payout.deal_id || "",
-      MID: String(payout.mid || ""),
-      "Merchant Name": payout.merchant_name || "",
-      "Payout Month": payout.payout_month || "",
-      "Payout Date": payout.payout_date || "",
-      "Partner ID": payout.partner_airtable_id || "",
-      "Partner Name": payout.partner_name || "",
-      "Partner Role": payout.partner_role || "",
-      "Split %": payout.partner_split_pct || 0,
-      "Payout Amount": payout.partner_payout_amount || 0,
-      Volume: payout.volume || 0,
-      Fees: payout.fees || 0,
-      "Net Residual": payout.net_residual || 0,
-      "Payout Type": payout.payout_type || "residual",
-      Status: payout.assignment_status || "",
-      "Paid Status": payout.paid_status || "unpaid",
-      "Paid At": payout.paid_at || "",
-      "Is Legacy": payout.is_legacy_import ? "Yes" : "No",
-    })
+    // Log if we found any duplicates already in Airtable
+    for (const [payoutId, recordIds] of existingRecords.entries()) {
+      if (recordIds.length > 1) {
+        console.warn(`[confirm-assignment] DUPLICATE DETECTED: Payout ${payoutId} has ${recordIds.length} Airtable records`)
+      }
+    }
+
+    // Format payouts for Airtable - only include non-empty values for select fields
+    const formatPayout = (payout: any) => {
+      const record: Record<string, any> = {
+        "Payout ID": payout.id,
+        "Split %": payout.partner_split_pct || 0,
+        "Payout Amount": payout.partner_payout_amount || 0,
+        Volume: payout.volume || 0,
+        Fees: payout.fees || 0,
+        "Net Residual": payout.net_residual || 0,
+      }
+
+      // Only include text/select fields if they have valid non-empty values
+      if (payout.deal_id) record["Deal ID"] = payout.deal_id
+      if (payout.mid) record["MID"] = String(payout.mid)
+      if (payout.merchant_name) record["Merchant Name"] = payout.merchant_name
+      if (payout.payout_month) record["Payout Month"] = payout.payout_month
+      if (payout.payout_date) record["Payout Date"] = payout.payout_date
+      if (payout.partner_airtable_id) record["Partner ID"] = payout.partner_airtable_id
+      if (payout.partner_name) record["Partner Name"] = payout.partner_name
+      if (payout.paid_at) record["Paid At"] = payout.paid_at
+      if (payout.partner_role) record["Partner Role"] = payout.partner_role
+      if (payout.payout_type) record["Payout Type"] = payout.payout_type
+      if (payout.assignment_status) record["Status"] = payout.assignment_status
+      if (payout.paid_status) record["Paid Status"] = payout.paid_status
+
+      record["Is Legacy"] = payout.is_legacy_import ? "Yes" : "No"
+
+      return record
+    }
 
     const recordsToCreate: any[] = []
     const recordsToUpdate: any[] = []
+    const duplicatesToDelete: string[] = [] // Airtable record IDs to delete
 
     for (const payout of payouts) {
-      const airtableRecordId = existingRecords.get(payout.id)
+      const airtableRecordIds = existingRecords.get(payout.id) || []
       const fields = formatPayout(payout)
 
-      if (airtableRecordId) {
-        recordsToUpdate.push({ id: airtableRecordId, fields })
+      if (airtableRecordIds.length > 0) {
+        // Use the FIRST record for update, mark the rest as duplicates to delete
+        recordsToUpdate.push({ id: airtableRecordIds[0], fields })
+
+        // If there are duplicates (more than 1 record), queue extras for deletion
+        if (airtableRecordIds.length > 1) {
+          duplicatesToDelete.push(...airtableRecordIds.slice(1))
+          console.log(`[confirm-assignment] Will delete ${airtableRecordIds.length - 1} duplicate(s) for payout ${payout.id}`)
+        }
       } else {
         recordsToCreate.push({ fields })
       }
@@ -89,6 +122,20 @@ async function syncPayoutsToAirtable(payoutIds: string[]) {
 
     let synced = 0
     const batchSize = 10
+
+    // Delete duplicates first (if any found)
+    if (duplicatesToDelete.length > 0) {
+      console.log(`[confirm-assignment] Deleting ${duplicatesToDelete.length} duplicate Airtable records`)
+      for (let i = 0; i < duplicatesToDelete.length; i += batchSize) {
+        const batch = duplicatesToDelete.slice(i, i + batchSize)
+        const deleteParams = batch.map((id) => `records[]=${id}`).join("&")
+        await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}?${deleteParams}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` },
+        })
+        await new Promise((r) => setTimeout(r, 220))
+      }
+    }
 
     // Create new records
     for (let i = 0; i < recordsToCreate.length; i += batchSize) {
@@ -120,8 +167,8 @@ async function syncPayoutsToAirtable(payoutIds: string[]) {
       await new Promise((r) => setTimeout(r, 220))
     }
 
-    console.log(`[confirm-assignment] Synced ${synced} payouts to Airtable`)
-    return { synced, created: recordsToCreate.length, updated: recordsToUpdate.length }
+    console.log(`[confirm-assignment] Synced ${synced} payouts to Airtable (deleted ${duplicatesToDelete.length} duplicates)`)
+    return { synced, created: recordsToCreate.length, updated: recordsToUpdate.length, duplicatesDeleted: duplicatesToDelete.length }
   } catch (error) {
     console.error("[confirm-assignment] Airtable sync error:", error)
     return { synced: 0, error }
@@ -146,8 +193,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "No events found" }, { status: 404 })
     }
 
+    // Filter out events without deals (but don't fail the whole batch)
     const eventsWithoutDeals = events.filter((e) => !e.deal_id)
-    if (eventsWithoutDeals.length > 0) {
+    const eventsWithDeals = events.filter((e) => e.deal_id)
+
+    if (eventsWithDeals.length === 0) {
       const mids = eventsWithoutDeals.map((e) => e.mid).join(", ")
       return NextResponse.json(
         {
@@ -158,7 +208,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const dealIds = events.map((e) => e.deal_id).filter(Boolean)
+    const dealIds = eventsWithDeals.map((e) => e.deal_id).filter(Boolean)
     let dealsMap: Record<string, any> = {}
 
     if (dealIds.length > 0) {
@@ -171,17 +221,24 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const dealsWithoutParticipants = events.filter((e) => {
+    // Filter out events without participants (but don't fail the whole batch)
+    const eventsWithoutParticipants = eventsWithDeals.filter((e) => {
       const deal = dealsMap[e.deal_id]
       return !deal || !deal.participants_json || deal.participants_json.length === 0
     })
 
-    if (dealsWithoutParticipants.length > 0) {
-      const mids = dealsWithoutParticipants.map((e) => e.mid).join(", ")
+    const eventsToConfirm = eventsWithDeals.filter((e) => {
+      const deal = dealsMap[e.deal_id]
+      return deal && deal.participants_json && deal.participants_json.length > 0
+    })
+
+    // If NO events can be confirmed, return error
+    if (eventsToConfirm.length === 0) {
+      const mids = eventsWithoutParticipants.map((e) => e.mid).join(", ")
       return NextResponse.json(
         {
           error: `Cannot confirm events without participants assigned. Please assign partners first for MIDs: ${mids}`,
-          events_without_participants: dealsWithoutParticipants.map((e) => ({
+          events_without_participants: eventsWithoutParticipants.map((e) => ({
             id: e.id,
             mid: e.mid,
             merchant: e.merchant_name,
@@ -191,13 +248,16 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Use eventsToConfirm from here on (not all events)
+    const confirmableEventIds = eventsToConfirm.map((e) => e.id)
+
     const { error: updateError } = await supabase
       .from("csv_data")
       .update({
         assignment_status: "confirmed",
         updated_at: new Date().toISOString(),
       })
-      .in("id", event_ids)
+      .in("id", confirmableEventIds)
 
     if (updateError) {
       console.error("[confirm-assignment] Error updating csv_data:", updateError)
@@ -207,11 +267,11 @@ export async function POST(request: NextRequest) {
     logActionAsync({
       actionType: "bulk_update",
       entityType: "assignment",
-      entityId: event_ids.join(","),
-      entityName: `${events.length} events`,
-      description: `Confirmed ${events.length} assignment(s)`,
-      previousData: { status: "pending", event_ids },
-      newData: { status: "confirmed", event_ids, merchants: events.map((e) => e.merchant_name) },
+      entityId: confirmableEventIds.join(","),
+      entityName: `${eventsToConfirm.length} events`,
+      description: `Confirmed ${eventsToConfirm.length} assignment(s)${eventsWithoutParticipants.length > 0 ? ` (skipped ${eventsWithoutParticipants.length} without participants)` : ""}`,
+      previousData: { status: "pending", event_ids: confirmableEventIds },
+      newData: { status: "confirmed", event_ids: confirmableEventIds, merchants: eventsToConfirm.map((e) => e.merchant_name) },
       requestId,
     })
 
@@ -221,7 +281,7 @@ export async function POST(request: NextRequest) {
         assignment_status: "confirmed",
         updated_at: new Date().toISOString(),
       })
-      .in("csv_data_id", event_ids)
+      .in("csv_data_id", confirmableEventIds)
 
     if (payoutsUpdateError) {
       console.error("[confirm-assignment] Error updating payouts:", payoutsUpdateError)
@@ -230,10 +290,10 @@ export async function POST(request: NextRequest) {
     const { data: existingPayouts } = await supabase
       .from("payouts")
       .select("csv_data_id, id")
-      .in("csv_data_id", event_ids)
+      .in("csv_data_id", confirmableEventIds)
 
     const eventsWithPayouts = new Set(existingPayouts?.map((p) => p.csv_data_id) || [])
-    const eventsNeedingPayouts = events.filter((e) => !eventsWithPayouts.has(e.id))
+    const eventsNeedingPayouts = eventsToConfirm.filter((e) => !eventsWithPayouts.has(e.id))
 
     const allPayoutIds: string[] = existingPayouts?.map((p) => p.id) || []
 
@@ -308,9 +368,17 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      confirmed: events.length,
+      confirmed: eventsToConfirm.length,
+      skipped: eventsWithoutDeals.length + eventsWithoutParticipants.length,
+      skipped_without_deals: eventsWithoutDeals.length,
+      skipped_without_participants: eventsWithoutParticipants.length,
       payouts_updated: !payoutsUpdateError,
       airtable_synced: airtableResult.synced,
+      // Include details about skipped events so frontend can show them
+      skipped_events: [
+        ...eventsWithoutDeals.map((e) => ({ id: e.id, mid: e.mid, merchant: e.merchant_name, reason: "no_deal" })),
+        ...eventsWithoutParticipants.map((e) => ({ id: e.id, mid: e.mid, merchant: e.merchant_name, reason: "no_participants" })),
+      ],
     })
   } catch (error: any) {
     console.error("[confirm-assignment] Error:", error)

@@ -187,6 +187,20 @@ export async function POST(request: NextRequest) {
           const { data: exists } = await supabase.from("deals").select("id").eq("mid", oldMid).limit(1)
 
           if (exists && exists.length > 0) {
+            // Reset csv_data to prevent orphaned references BEFORE deleting
+            await supabase
+              .from("csv_data")
+              .update({
+                assignment_status: "unassigned",
+                deal_id: null,
+                assigned_agent_id: null,
+                assigned_agent_name: null,
+              })
+              .eq("deal_id", deal.id)
+
+            // Delete associated payouts
+            await supabase.from("payouts").delete().eq("deal_id", deal.id)
+
             const { error: deleteError } = await supabase.from("deals").delete().eq("id", deal.id)
 
             if (!deleteError) deletedCount++

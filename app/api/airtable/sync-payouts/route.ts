@@ -5,27 +5,36 @@ const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY
 const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID || "appRygdwVIEtbUI1C"
 const AIRTABLE_TABLE_ID = "tblWZlEw6pM9ytA1x"
 
-const formatPayoutForAirtable = (payout: any) => ({
-  "Payout ID": payout.id,
-  "Deal ID": payout.deal_id || "",
-  MID: String(payout.mid || ""),
-  "Merchant Name": payout.merchant_name || "",
-  "Payout Month": payout.payout_month || "",
-  "Payout Date": payout.payout_date || "",
-  "Partner ID": payout.partner_airtable_id || "",
-  "Partner Name": payout.partner_name || "",
-  "Partner Role": payout.partner_role || "",
-  "Split %": payout.partner_split_pct || 0,
-  "Payout Amount": payout.partner_payout_amount || 0,
-  Volume: payout.volume || 0,
-  Fees: payout.fees || 0,
-  "Net Residual": payout.net_residual || 0,
-  "Payout Type": payout.payout_type || "residual",
-  Status: payout.assignment_status || "",
-  "Paid Status": payout.paid_status || "unpaid",
-  "Paid At": payout.paid_at || "",
-  "Is Legacy": payout.is_legacy_import ? "Yes" : "No",
-})
+const formatPayoutForAirtable = (payout: any) => {
+  const record: Record<string, any> = {
+    "Payout ID": payout.id,
+    "Split %": payout.partner_split_pct || 0,
+    "Payout Amount": payout.partner_payout_amount || 0,
+    Volume: payout.volume || 0,
+    Fees: payout.fees || 0,
+    "Net Residual": payout.net_residual || 0,
+  }
+
+  // Only include text/select fields if they have valid non-empty values
+  // to avoid "INVALID_MULTIPLE_CHOICE_OPTIONS" errors on select fields
+  if (payout.deal_id) record["Deal ID"] = payout.deal_id
+  if (payout.mid) record["MID"] = String(payout.mid)
+  if (payout.merchant_name) record["Merchant Name"] = payout.merchant_name
+  if (payout.payout_month) record["Payout Month"] = payout.payout_month
+  if (payout.payout_date) record["Payout Date"] = payout.payout_date
+  if (payout.partner_airtable_id) record["Partner ID"] = payout.partner_airtable_id
+  if (payout.partner_name) record["Partner Name"] = payout.partner_name
+  if (payout.paid_at) record["Paid At"] = payout.paid_at
+  if (payout.partner_role) record["Partner Role"] = payout.partner_role
+  if (payout.payout_type) record["Payout Type"] = payout.payout_type
+  if (payout.assignment_status) record["Status"] = payout.assignment_status
+  if (payout.paid_status) record["Paid Status"] = payout.paid_status
+
+  // Boolean field - always has a value
+  record["Is Legacy"] = payout.is_legacy_import ? "Yes" : "No"
+
+  return record
+}
 
 export async function POST(request: Request) {
   if (!AIRTABLE_API_KEY) {
@@ -61,8 +70,8 @@ export async function POST(request: Request) {
       })
     }
 
-    // Step 2: Fetch existing Airtable records
-    const existingRecords: Map<string, { id: string; fields: any }> = new Map()
+    // Step 2: Fetch existing Airtable records (track ALL records per payout to detect duplicates)
+    const existingRecords: Map<string, { id: string; fields: any }[]> = new Map()
     let offset: string | undefined
 
     do {
@@ -91,23 +100,38 @@ export async function POST(request: Request) {
       for (const record of data.records || []) {
         const payoutId = record.fields["Payout ID"]
         if (payoutId) {
-          existingRecords.set(payoutId, record)
+          // Track ALL records for each payout ID (to detect duplicates)
+          const existing = existingRecords.get(payoutId) || []
+          existing.push(record)
+          existingRecords.set(payoutId, existing)
         }
       }
       offset = data.offset
     } while (offset)
 
-    // Step 3: Determine what to create vs update
+    // Step 3: Determine what to create vs update, and find duplicates to delete
     const recordsToCreate: any[] = []
     const recordsToUpdate: any[] = []
+    const duplicatesToDelete: string[] = []
 
     for (const payout of allPayouts) {
       const airtableData = formatPayoutForAirtable(payout)
-      const existingRecord = existingRecords.get(payout.id)
+      const existingRecordsList = existingRecords.get(payout.id) || []
 
-      if (existingRecord) {
+      if (existingRecordsList.length > 0) {
+        // Use the FIRST record, mark the rest as duplicates
+        const primaryRecord = existingRecordsList[0]
+
+        // Queue duplicates for deletion
+        if (existingRecordsList.length > 1) {
+          for (let i = 1; i < existingRecordsList.length; i++) {
+            duplicatesToDelete.push(existingRecordsList[i].id)
+          }
+          console.log(`[sync-payouts] Found ${existingRecordsList.length - 1} duplicate(s) for payout ${payout.id}`)
+        }
+
         // Check if any fields have changed
-        const existing = existingRecord.fields
+        const existing = primaryRecord.fields
         const hasChanges =
           existing["Paid Status"] !== airtableData["Paid Status"] ||
           existing["Paid At"] !== airtableData["Paid At"] ||
@@ -119,7 +143,7 @@ export async function POST(request: Request) {
 
         if (hasChanges) {
           recordsToUpdate.push({
-            id: existingRecord.id,
+            id: primaryRecord.id,
             fields: airtableData,
           })
         }
@@ -127,6 +151,23 @@ export async function POST(request: Request) {
         recordsToCreate.push({
           fields: airtableData,
         })
+      }
+    }
+
+    // Step 3.5: Delete duplicates first
+    let duplicatesDeleted = 0
+    if (duplicatesToDelete.length > 0) {
+      console.log(`[sync-payouts] Deleting ${duplicatesToDelete.length} duplicate Airtable records`)
+      const batchSize = 10
+      for (let i = 0; i < duplicatesToDelete.length; i += batchSize) {
+        const batch = duplicatesToDelete.slice(i, i + batchSize)
+        const deleteParams = batch.map((id) => `records[]=${id}`).join("&")
+        const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}?${deleteParams}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` },
+        })
+        if (res.ok) duplicatesDeleted += batch.length
+        await new Promise((resolve) => setTimeout(resolve, 220))
       }
     }
 
@@ -186,9 +227,10 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
-      message: `Sync complete: ${createdCount} created, ${updatedCount} updated`,
+      message: `Sync complete: ${createdCount} created, ${updatedCount} updated, ${duplicatesDeleted} duplicates removed`,
       created: createdCount,
       updated: updatedCount,
+      duplicatesDeleted,
       toCreate: recordsToCreate.length,
       toUpdate: recordsToUpdate.length,
       totalPayouts: allPayouts.length,

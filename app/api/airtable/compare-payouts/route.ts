@@ -107,8 +107,8 @@ export async function POST(request: Request) {
       })
     }
 
-    // Step 2: Fetch existing Airtable records
-    const existingRecords: Map<string, { id: string; fields: any }> = new Map()
+    // Step 2: Fetch existing Airtable records (track ALL to detect duplicates)
+    const existingRecords: Map<string, { id: string; fields: any }[]> = new Map()
     let offset: string | undefined
 
     do {
@@ -137,11 +137,27 @@ export async function POST(request: Request) {
       for (const record of data.records || []) {
         const payoutId = record.fields["Payout ID"]
         if (payoutId) {
-          existingRecords.set(payoutId, record)
+          // Track ALL records for each payout ID (to detect duplicates)
+          const existing = existingRecords.get(payoutId) || []
+          existing.push(record)
+          existingRecords.set(payoutId, existing)
         }
       }
       offset = data.offset
     } while (offset)
+
+    // Count duplicates
+    let duplicateCount = 0
+    const duplicateRecordIds: string[] = []
+    for (const [, records] of existingRecords.entries()) {
+      if (records.length > 1) {
+        duplicateCount += records.length - 1
+        // Mark all but the first as duplicates
+        for (let i = 1; i < records.length; i++) {
+          duplicateRecordIds.push(records[i].id)
+        }
+      }
+    }
 
     // Step 3: Compare and categorize
     const newRecords: any[] = []
@@ -150,9 +166,9 @@ export async function POST(request: Request) {
 
     for (const payout of allPayouts) {
       const airtableData = formatPayoutForAirtable(payout)
-      const existingRecord = existingRecords.get(payout.id)
+      const existingRecordsList = existingRecords.get(payout.id)
 
-      if (!existingRecord) {
+      if (!existingRecordsList || existingRecordsList.length === 0) {
         // New record - doesn't exist in Airtable
         newRecords.push({
           payoutId: payout.id,
@@ -166,8 +182,9 @@ export async function POST(request: Request) {
           fields: airtableData,
         })
       } else {
-        // Check if any fields changed
-        const existing = existingRecord.fields
+        // Use the FIRST record (primary), extras are duplicates
+        const primaryRecord = existingRecordsList[0]
+        const existing = primaryRecord.fields
         const changes: { field: string; oldValue: any; newValue: any }[] = []
 
         for (const field of COMPARE_FIELDS) {
@@ -183,7 +200,7 @@ export async function POST(request: Request) {
         if (changes.length > 0) {
           changedRecords.push({
             payoutId: payout.id,
-            airtableRecordId: existingRecord.id,
+            airtableRecordId: primaryRecord.id,
             mid: payout.mid,
             merchantName: payout.merchant_name,
             partnerName: payout.partner_name,
@@ -202,6 +219,8 @@ export async function POST(request: Request) {
       newRecords,
       changedRecords,
       unchangedCount,
+      duplicateCount,
+      duplicateRecordIds: duplicateRecordIds.length > 0 ? duplicateRecordIds : undefined,
       totalSupabase: allPayouts.length,
       totalAirtable: existingRecords.size,
     })
