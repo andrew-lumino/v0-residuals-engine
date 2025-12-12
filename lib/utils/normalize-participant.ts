@@ -32,17 +32,37 @@ export function normalizeParticipants(rawParticipants: RawParticipant[]): Normal
 }
 
 /**
+ * Normalizes partner role based on partner name
+ * Ensures consistent role labeling for known partners
+ */
+function normalizePartnerRole(partnerName: string, currentRole: string): string {
+  // Lumino Income Fund LP should always be "Fund I"
+  if (partnerName.toLowerCase().includes("lumino income fund")) {
+    return "Fund I"
+  }
+  // Lumino (Company) should always be "Company"
+  if (partnerName.toLowerCase().includes("lumino (company)") || partnerName.toLowerCase() === "lumino") {
+    return "Company"
+  }
+  return currentRole || "Partner"
+}
+
+/**
  * Normalizes a single participant to use consistent field naming
  */
 export function normalizeParticipant(p: RawParticipant | Record<string, unknown>): NormalizedParticipant {
+  const partnerName = (p.partner_name as string) || (p.name as string) || ""
+  const rawRole = (p.partner_role as string) || (p.role as string) || "Partner"
+  const normalizedRole = normalizePartnerRole(partnerName, rawRole)
+
   return {
     partner_airtable_id: (p.partner_airtable_id as string) || (p.partner_id as string) || "",
-    partner_name: (p.partner_name as string) || (p.name as string) || "",
-    partner_role: (p.partner_role as string) || (p.role as string) || "Partner",
+    partner_name: partnerName,
+    partner_role: normalizedRole,
     split_pct: (p.split_pct as number) ?? (p.split as number) ?? 0,
     // Keep legacy fields for backwards compatibility
-    name: (p.partner_name as string) || (p.name as string) || "",
-    role: (p.partner_role as string) || (p.role as string) || "Partner",
+    name: partnerName,
+    role: normalizedRole,
   }
 }
 
