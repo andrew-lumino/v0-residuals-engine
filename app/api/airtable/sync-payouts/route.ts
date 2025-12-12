@@ -1,5 +1,6 @@
 import { createServerClient } from "@/lib/db/server"
 import { NextResponse } from "next/server"
+import { logDebug, generateRequestId } from "@/lib/utils/history"
 
 const AIRTABLE_API_KEY = process.env.AIRTABLE_API_KEY
 const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID || "appRygdwVIEtbUI1C"
@@ -37,6 +38,8 @@ const formatPayoutForAirtable = (payout: any) => {
 }
 
 export async function POST(request: Request) {
+  const requestId = generateRequestId()
+
   if (!AIRTABLE_API_KEY) {
     return NextResponse.json({ error: "Missing AIRTABLE_API_KEY environment variable" }, { status: 500 })
   }
@@ -44,6 +47,8 @@ export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}))
     const { month } = body
+
+    await logDebug("info", "sync", `Starting Airtable sync${month ? ` for month ${month}` : " (all months)"}`, { month }, requestId)
 
     const supabase = await createServerClient()
 
@@ -225,6 +230,14 @@ export async function POST(request: Request) {
       await new Promise((resolve) => setTimeout(resolve, 220))
     }
 
+    await logDebug("info", "sync", `Airtable sync complete: ${createdCount} created, ${updatedCount} updated, ${duplicatesDeleted} duplicates removed`, {
+      created: createdCount,
+      updated: updatedCount,
+      duplicatesDeleted,
+      totalPayouts: allPayouts.length,
+      unchanged: allPayouts.length - createdCount - updatedCount,
+    }, requestId)
+
     return NextResponse.json({
       success: true,
       message: `Sync complete: ${createdCount} created, ${updatedCount} updated, ${duplicatesDeleted} duplicates removed`,
@@ -241,6 +254,7 @@ export async function POST(request: Request) {
       updateErrors: updateErrors.length > 0 ? updateErrors.slice(0, 5) : undefined,
     })
   } catch (error: any) {
+    await logDebug("error", "sync", `Airtable sync failed: ${error.message}`, { error: error.message }, requestId)
     return NextResponse.json({ error: error.message || "Failed to sync payouts to Airtable" }, { status: 500 })
   }
 }

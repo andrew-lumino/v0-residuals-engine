@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/db/server"
 import { type NextRequest, NextResponse } from "next/server"
-import { logActionAsync } from "@/lib/utils/history"
+import { logActionAsync, logDebug, generateRequestId } from "@/lib/utils/history"
 import { normalizeParticipant } from "@/lib/utils/normalize-participant"
 
 async function syncPayoutsToAirtable(payoutIds: string[]) {
@@ -176,11 +176,13 @@ async function syncPayoutsToAirtable(payoutIds: string[]) {
 }
 
 export async function POST(request: NextRequest) {
-  const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`
+  const requestId = generateRequestId()
 
   try {
     const { event_ids } = await request.json()
     const supabase = await createClient()
+
+    await logDebug("info", "api", `Starting bulk confirm for ${event_ids?.length || 0} events`, { eventCount: event_ids?.length }, requestId)
 
     const { data: events, error: fetchError } = await supabase.from("csv_data").select("*").in("id", event_ids)
 
@@ -366,6 +368,12 @@ export async function POST(request: NextRequest) {
       airtableResult = await syncPayoutsToAirtable(allPayoutIds)
     }
 
+    await logDebug("info", "api", `Bulk confirm complete: ${eventsToConfirm.length} confirmed, ${eventsWithoutDeals.length + eventsWithoutParticipants.length} skipped, ${airtableResult.synced} synced to Airtable`, {
+      confirmed: eventsToConfirm.length,
+      skipped: eventsWithoutDeals.length + eventsWithoutParticipants.length,
+      airtableSynced: airtableResult.synced,
+    }, requestId)
+
     return NextResponse.json({
       success: true,
       confirmed: eventsToConfirm.length,
@@ -382,6 +390,7 @@ export async function POST(request: NextRequest) {
     })
   } catch (error: any) {
     console.error("[confirm-assignment] Error:", error)
+    await logDebug("error", "api", `Bulk confirm failed: ${error.message}`, { error: error.message }, requestId)
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }

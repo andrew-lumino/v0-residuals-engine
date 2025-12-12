@@ -2,10 +2,10 @@ import { createClient } from "@/lib/db/server"
 import { type NextRequest, NextResponse } from "next/server"
 import { parseCsvFile } from "@/lib/utils/csvParser"
 import type { BatchImportResult } from "@/lib/types/api"
-import { logActionAsync } from "@/lib/utils/history"
+import { logActionAsync, logDebug, generateRequestId } from "@/lib/utils/history"
 
 export async function POST(request: NextRequest) {
-  const requestId = crypto.randomUUID()
+  const requestId = generateRequestId()
 
   try {
     const formData = await request.formData()
@@ -131,10 +131,18 @@ export async function POST(request: NextRequest) {
       errors,
     }
 
+    await logDebug("info", "sync", `CSV upload complete: ${newRows.length} imported, ${skippedCount} duplicates skipped`, {
+      fileName: file.name,
+      imported: newRows.length,
+      duplicates: skippedCount,
+      payout_month: selectedMonth,
+    }, requestId)
+
     console.log("[v0] Upload success:", result)
     return NextResponse.json({ success: true, data: result })
   } catch (error) {
     console.error("[v0] Upload handler error:", error)
+    await logDebug("error", "sync", `CSV upload failed: ${error instanceof Error ? error.message : "Unknown error"}`, { error: error instanceof Error ? error.message : "Unknown error" }, requestId)
     return NextResponse.json(
       {
         success: false,
