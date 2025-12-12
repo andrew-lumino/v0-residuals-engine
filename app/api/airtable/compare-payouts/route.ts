@@ -84,19 +84,43 @@ export async function POST(request: Request) {
 
     const supabase = await createServerClient()
 
-    let query = supabase.from("payouts").select("*").order("created_at", { ascending: false }).limit(10000)
+    // Supabase has a default limit of 1000, so we need to paginate to get ALL payouts
+    const allPayouts: any[] = []
+    const PAGE_SIZE = 1000
+    let from = 0
 
-    if (month) {
-      query = query.eq("payout_month", month)
+    while (true) {
+      let query = supabase
+        .from("payouts")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .range(from, from + PAGE_SIZE - 1)
+
+      if (month) {
+        query = query.eq("payout_month", month)
+      }
+
+      const { data: pageData, error } = await query
+
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 })
+      }
+
+      if (!pageData || pageData.length === 0) {
+        break
+      }
+
+      allPayouts.push(...pageData)
+
+      // If we got less than PAGE_SIZE, we've reached the end
+      if (pageData.length < PAGE_SIZE) {
+        break
+      }
+
+      from += PAGE_SIZE
     }
 
-    const { data: allPayouts, error } = await query
-
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 })
-    }
-
-    if (!allPayouts || allPayouts.length === 0) {
+    if (allPayouts.length === 0) {
       return NextResponse.json({
         success: true,
         newRecords: [],
