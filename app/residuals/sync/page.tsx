@@ -3,7 +3,7 @@
 import { useState, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { CheckCircle2, AlertCircle, Download, Upload, Loader2, Search, ArrowRight } from "lucide-react"
+import { CheckCircle2, AlertCircle, Download, Upload, Loader2, Search, ArrowRight, Trash2 } from "lucide-react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -41,6 +41,16 @@ interface ChangedRecord {
   fields: any
 }
 
+interface OrphanedRecord {
+  airtableRecordId: string
+  payoutId: string
+  mid: string
+  merchantName: string
+  partnerName: string
+  payoutMonth: string
+  payoutAmount: number
+}
+
 export default function SyncPage() {
   const [isComparing, setIsComparing] = useState(false)
   const [isSyncing, setIsSyncing] = useState(false)
@@ -52,14 +62,18 @@ export default function SyncPage() {
   const [compareResults, setCompareResults] = useState<{
     newRecords: NewRecord[]
     changedRecords: ChangedRecord[]
+    orphanedRecords: OrphanedRecord[]
     unchangedCount: number
     totalSupabase: number
     totalAirtable: number
+    orphanedCount: number
   } | null>(null)
 
   // Selection state
   const [selectedNew, setSelectedNew] = useState<Set<string>>(new Set())
   const [selectedChanged, setSelectedChanged] = useState<Set<string>>(new Set())
+  const [selectedOrphaned, setSelectedOrphaned] = useState<Set<string>>(new Set())
+  const [isDeleting, setIsDeleting] = useState(false)
 
   // Sync result
   const [syncResult, setSyncResult] = useState<{
@@ -93,6 +107,7 @@ export default function SyncPage() {
     setSyncResult(null)
     setSelectedNew(new Set())
     setSelectedChanged(new Set())
+    setSelectedOrphaned(new Set())
     setLogs([])
 
     addLog("Starting comparison...")
@@ -114,6 +129,7 @@ export default function SyncPage() {
         addLog(`Found ${data.totalAirtable} existing records in Airtable`)
         addLog(`New records to create: ${data.newRecords.length}`)
         addLog(`Changed records to update: ${data.changedRecords.length}`)
+        addLog(`Orphaned records to delete: ${data.orphanedRecords?.length || 0}`)
         addLog(`Unchanged records: ${data.unchangedCount}`)
         addLog("Comparison complete!")
 
@@ -122,6 +138,7 @@ export default function SyncPage() {
         // Auto-select all by default
         setSelectedNew(new Set(data.newRecords.map((r: NewRecord) => r.payoutId)))
         setSelectedChanged(new Set(data.changedRecords.map((r: ChangedRecord) => r.payoutId)))
+        setSelectedOrphaned(new Set((data.orphanedRecords || []).map((r: OrphanedRecord) => r.airtableRecordId)))
       } else {
         addLog(`ERROR: ${data.error}`)
       }
@@ -192,6 +209,52 @@ export default function SyncPage() {
     }
   }
 
+  const handleDeleteOrphaned = async () => {
+    if (!compareResults || selectedOrphaned.size === 0) return
+
+    const recordsToDelete = compareResults.orphanedRecords.filter((r) => selectedOrphaned.has(r.airtableRecordId))
+
+    if (recordsToDelete.length === 0) {
+      addLog("No orphaned records selected to delete")
+      return
+    }
+
+    setIsDeleting(true)
+    addLog(`Deleting ${recordsToDelete.length} orphaned records from Airtable...`)
+
+    try {
+      const response = await fetch("/api/airtable/delete-records", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          recordIds: recordsToDelete.map((r) => r.airtableRecordId),
+        }),
+      })
+
+      const data = await response.json()
+
+      if (data.success) {
+        addLog(`Successfully deleted ${data.deleted} records from Airtable`)
+        // Remove deleted records from state
+        setCompareResults((prev) => {
+          if (!prev) return null
+          return {
+            ...prev,
+            orphanedRecords: prev.orphanedRecords.filter((r) => !selectedOrphaned.has(r.airtableRecordId)),
+            orphanedCount: prev.orphanedCount - data.deleted,
+          }
+        })
+        setSelectedOrphaned(new Set())
+      } else {
+        addLog(`ERROR: ${data.error}`)
+      }
+    } catch (error: any) {
+      addLog(`ERROR: ${error.message}`)
+    } finally {
+      setIsDeleting(false)
+    }
+  }
+
   const handleExport = async () => {
     try {
       addLog("Starting CSV export...")
@@ -228,6 +291,14 @@ export default function SyncPage() {
       setSelectedChanged(new Set(compareResults.changedRecords.map((r) => r.payoutId)))
     } else {
       setSelectedChanged(new Set())
+    }
+  }
+
+  const toggleSelectAllOrphaned = (checked: boolean) => {
+    if (checked && compareResults) {
+      setSelectedOrphaned(new Set(compareResults.orphanedRecords.map((r) => r.airtableRecordId)))
+    } else {
+      setSelectedOrphaned(new Set())
     }
   }
 
@@ -326,21 +397,34 @@ export default function SyncPage() {
                 <CardTitle>Comparison Results</CardTitle>
                 <CardDescription>
                   {compareResults.newRecords.length} new, {compareResults.changedRecords.length} changed,{" "}
+                  {compareResults.orphanedRecords?.length || 0} orphaned (to delete),{" "}
                   {compareResults.unchangedCount} unchanged
                 </CardDescription>
               </div>
-              <Button
-                onClick={handleSync}
-                disabled={isSyncing || (selectedNew.size === 0 && selectedChanged.size === 0)}
-                className="bg-green-600 hover:bg-green-700 text-white"
-              >
-                {isSyncing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
-                {isSyncing ? "Syncing..." : `Sync Selected (${selectedNew.size + selectedChanged.size})`}
-              </Button>
+              <div className="flex gap-2">
+                {compareResults.orphanedRecords?.length > 0 && (
+                  <Button
+                    onClick={handleDeleteOrphaned}
+                    disabled={isDeleting || selectedOrphaned.size === 0}
+                    variant="destructive"
+                  >
+                    {isDeleting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                    {isDeleting ? "Deleting..." : `Delete Orphaned (${selectedOrphaned.size})`}
+                  </Button>
+                )}
+                <Button
+                  onClick={handleSync}
+                  disabled={isSyncing || (selectedNew.size === 0 && selectedChanged.size === 0)}
+                  className="bg-green-600 hover:bg-green-700 text-white"
+                >
+                  {isSyncing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+                  {isSyncing ? "Syncing..." : `Sync Selected (${selectedNew.size + selectedChanged.size})`}
+                </Button>
+              </div>
             </div>
           </CardHeader>
           <CardContent>
-            <Tabs defaultValue="new">
+            <Tabs defaultValue={compareResults.orphanedRecords?.length > 0 ? "orphaned" : "new"}>
               <TabsList>
                 <TabsTrigger value="new">
                   New Records
@@ -352,6 +436,12 @@ export default function SyncPage() {
                   Changed Records
                   <Badge variant="secondary" className="ml-2">
                     {compareResults.changedRecords.length}
+                  </Badge>
+                </TabsTrigger>
+                <TabsTrigger value="orphaned" className={compareResults.orphanedRecords?.length > 0 ? "text-red-600" : ""}>
+                  Orphaned (Delete)
+                  <Badge variant={compareResults.orphanedRecords?.length > 0 ? "destructive" : "secondary"} className="ml-2">
+                    {compareResults.orphanedRecords?.length || 0}
                   </Badge>
                 </TabsTrigger>
               </TabsList>
@@ -463,6 +553,64 @@ export default function SyncPage() {
                                 ))}
                               </div>
                             </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </ScrollArea>
+                )}
+              </TabsContent>
+
+              <TabsContent value="orphaned" className="mt-4">
+                {!compareResults.orphanedRecords || compareResults.orphanedRecords.length === 0 ? (
+                  <p className="text-muted-foreground text-center py-8">No orphaned records to delete</p>
+                ) : (
+                  <ScrollArea className="h-[400px]">
+                    <div className="bg-red-50 border border-red-200 rounded-md p-3 mb-4">
+                      <p className="text-red-800 text-sm">
+                        <strong>Warning:</strong> These records exist in Airtable but NOT in your database.
+                        They are likely duplicates that were already deleted from Supabase.
+                        Select and delete them to clean up Airtable.
+                      </p>
+                    </div>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="w-[50px]">
+                            <Checkbox
+                              checked={selectedOrphaned.size === compareResults.orphanedRecords.length}
+                              onCheckedChange={toggleSelectAllOrphaned}
+                            />
+                          </TableHead>
+                          <TableHead>MID</TableHead>
+                          <TableHead>Merchant</TableHead>
+                          <TableHead>Partner</TableHead>
+                          <TableHead>Month</TableHead>
+                          <TableHead className="text-right">Amount</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {compareResults.orphanedRecords.map((record) => (
+                          <TableRow key={record.airtableRecordId} className="bg-red-50/50">
+                            <TableCell>
+                              <Checkbox
+                                checked={selectedOrphaned.has(record.airtableRecordId)}
+                                onCheckedChange={(checked) => {
+                                  const newSet = new Set(selectedOrphaned)
+                                  if (checked) {
+                                    newSet.add(record.airtableRecordId)
+                                  } else {
+                                    newSet.delete(record.airtableRecordId)
+                                  }
+                                  setSelectedOrphaned(newSet)
+                                }}
+                              />
+                            </TableCell>
+                            <TableCell className="font-mono text-sm">{record.mid}</TableCell>
+                            <TableCell>{record.merchantName}</TableCell>
+                            <TableCell>{record.partnerName}</TableCell>
+                            <TableCell>{record.payoutMonth}</TableCell>
+                            <TableCell className="text-right">${(record.payoutAmount || 0).toFixed(2)}</TableCell>
                           </TableRow>
                         ))}
                       </TableBody>

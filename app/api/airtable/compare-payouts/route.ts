@@ -188,6 +188,9 @@ export async function POST(request: Request) {
     const changedRecords: any[] = []
     let unchangedCount = 0
 
+    // Track which Airtable payout IDs we've matched
+    const matchedPayoutIds = new Set<string>()
+
     for (const payout of allPayouts) {
       const airtableData = formatPayoutForAirtable(payout)
       const existingRecordsList = existingRecords.get(payout.id)
@@ -206,6 +209,9 @@ export async function POST(request: Request) {
           fields: airtableData,
         })
       } else {
+        // Mark this payout ID as matched
+        matchedPayoutIds.add(payout.id)
+
         // Use the FIRST record (primary), extras are duplicates
         const primaryRecord = existingRecordsList[0]
         const existing = primaryRecord.fields
@@ -238,15 +244,36 @@ export async function POST(request: Request) {
       }
     }
 
+    // Step 4: Find ORPHANED records (in Airtable but NOT in Supabase - need to DELETE)
+    const orphanedRecords: any[] = []
+    for (const [payoutId, records] of existingRecords.entries()) {
+      if (!matchedPayoutIds.has(payoutId)) {
+        // This Airtable record has no matching Supabase record - it's orphaned!
+        for (const record of records) {
+          orphanedRecords.push({
+            airtableRecordId: record.id,
+            payoutId: payoutId,
+            mid: record.fields["MID"] || "",
+            merchantName: record.fields["Merchant Name"] || "",
+            partnerName: record.fields["Partner Name"] || "",
+            payoutMonth: record.fields["Payout Month"] || "",
+            payoutAmount: record.fields["Payout Amount"] || 0,
+          })
+        }
+      }
+    }
+
     return NextResponse.json({
       success: true,
       newRecords,
       changedRecords,
+      orphanedRecords,
       unchangedCount,
       duplicateCount,
       duplicateRecordIds: duplicateRecordIds.length > 0 ? duplicateRecordIds : undefined,
       totalSupabase: allPayouts.length,
       totalAirtable: existingRecords.size,
+      orphanedCount: orphanedRecords.length,
     })
   } catch (error: any) {
     return NextResponse.json({ error: error.message || "Failed to compare payouts" }, { status: 500 })
