@@ -1,0 +1,37 @@
+# DUPLICATE PAYOUTS IDENTIFIED - CREATED 2025-12-13
+# Total duplicate groups: 243
+# Total duplicate records to delete: 337 (keeping 243, deleting 337)
+# 
+# Root cause analysis needed - see code endpoints that create payouts
+#
+# PATTERN OBSERVED:
+# - Many duplicates have one record with $0.00 amount and one with actual amount
+# - Same MID + payout_month + partner_airtable_id appearing multiple times
+# - Legacy imports (csv_data_id=null) seem to be the main culprits
+# - Some duplicates from bonus vs residual payout types being separated
+
+# KEY MERCHANTS WITH DUPLICATES (Wesley's reports):
+# - FABOWLOUS (0022623668)
+# - OAK PARK BAR AND GRILL (0022685485)  
+# - TAQUERIA SABROSA (0022815116)
+# - A&W 90021 (0022648889)
+
+# DUPLICATE IDS TO DELETE (sample - full list below):
+11fdb4b3-05c5-4ab0-9ee2-feec4e08cc9e - THE VENUE 2025-08 Lumino Income Fund LP $0.00
+0c204eb2-78e0-462f-852a-e838b3ffa863 - THE VENUE 2025-09 Lumino Income Fund LP $0.00
+74ab8fa6-ab47-4f45-850c-444bf1d83778 - LUCKEYS BBQ PLACE 2025-08 Lumino Income Fund LP $0.00
+07bbc090-6be2-414f-bc26-bdd4957dd81d - LUCKEYS BBQ PLACE 2025-09 Lumino Income Fund LP $0.00
+500da3b8-6df9-49a6-9fa9-c52dc56a6156 - BAGEL BOYS CAFE 2025-08 Lumino Income Fund LP $0.00
+ad5a2f06-049c-4a46-8cb8-dcd29241a0ad - BAGEL BOYS CAFE 2025-09 Lumino Income Fund LP $0.00
+...
+
+# ENDPOINTS TO CHECK FOR DUPLICATE CREATION:
+# 1. /api/assign-event - creates payouts when assigning deals
+# 2. /api/confirm-assignment - bulk confirm creates payouts
+# 3. /api/residuals/events/[id]/confirm - single event confirm
+# 4. /api/residuals/deals/[id] PATCH - updates payouts
+# 5. /api/deals/[id] PUT - recreates payouts
+
+# HYPOTHESIS: Multiple CSV uploads or legacy imports created duplicate events
+# that then generated duplicate payouts when confirmed.
+
