@@ -364,7 +364,7 @@ export function EditPendingDealModal({ event, isOpen, onClose, onComplete }: Edi
     if (isLumino) {
       toast({
         title: "Cannot Remove",
-        description: "Lumino Income Fund cannot be removed",
+        description: "Lumino (Company) cannot be removed. Set split to 0% instead.",
         variant: "destructive",
       })
       return

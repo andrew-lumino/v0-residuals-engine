@@ -253,19 +253,19 @@ export async function GET(request: NextRequest) {
         }
       }
 
-      // Get merchant names by deal_id (UUID) - more reliable than matching by MID
-      // since MIDs can have formatting differences (leading zeros, etc.)
-      const dealIds = (allDeals || []).map((d) => d.id).filter(Boolean)
-      const merchantMap: Record<string, string> = {}
+      // Get merchant names from payouts table - payouts.deal_id stores TEXT deal_id (e.g. "deal_abc123")
+      // NOT the UUID, so we need to match on deal_id TEXT field
+      const dealIdTexts = (allDeals || []).map((d) => d.deal_id).filter(Boolean)
+      const merchantMapByDealId: Record<string, string> = {}
 
-      if (dealIds.length > 0) {
+      if (dealIdTexts.length > 0) {
         const { data: payouts } = await supabase
           .from("payouts")
           .select("deal_id, merchant_name")
-          .in("deal_id", dealIds)
+          .in("deal_id", dealIdTexts)
         payouts?.forEach((p) => {
-          if (p.deal_id && p.merchant_name && !merchantMap[p.deal_id]) {
-            merchantMap[p.deal_id] = p.merchant_name
+          if (p.deal_id && p.merchant_name && !merchantMapByDealId[p.deal_id]) {
+            merchantMapByDealId[p.deal_id] = p.merchant_name
           }
         })
       }
@@ -283,7 +283,8 @@ export async function GET(request: NextRequest) {
 
         return {
           ...deal,
-          merchant_name: deal.id ? merchantMap[deal.id] || null : null,
+          // Use deal.merchant_name if it exists (new column), else fallback to payouts lookup
+          merchant_name: deal.merchant_name || (deal.deal_id ? merchantMapByDealId[deal.deal_id] || null : null),
           participants_json: parsedParticipants,
           is_pending: false,
         }

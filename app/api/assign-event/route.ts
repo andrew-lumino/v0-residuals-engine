@@ -77,6 +77,7 @@ export async function POST(request: NextRequest) {
       const dealPayload = {
         deal_id: generatedDealId,
         mid: midString,
+        merchant_name: new_deal.merchant_name || null,
         payout_type: new_deal.payout_type || "residual",
         participants_json: new_deal.participants.map((p: Participant) => ({
           partner_airtable_id: p.agent_id,

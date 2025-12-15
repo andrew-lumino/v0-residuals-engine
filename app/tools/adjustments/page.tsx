@@ -429,8 +429,10 @@ export default function AdjustmentsPage() {
       mid: deal.mid,
     })
     setSelectedDeal(deal)
+    // Filter out 0% participants - they shouldn't appear in adjustments
+    const activeParticipants = (deal.participants_json || []).filter((p) => p.split_pct > 0)
     setAdjustmentParticipants(
-      (deal.participants_json || []).map((p, idx) => ({
+      activeParticipants.map((p, idx) => ({
         index: idx,
         partner_airtable_id: p.partner_airtable_id || p.partner_id || p.agent_id || "",
         partner_name: p.partner_name || p.name || "",
@@ -842,7 +844,7 @@ export default function AdjustmentsPage() {
                           {deal.payout_type || "residual"}
                         </Badge>
                       </div>
-                      <div>{(deal.participants_json || []).length} participants</div>
+                      <div>{(deal.participants_json || []).filter((p) => p.split_pct > 0).length} participants</div>
                       <div className="flex items-center gap-2">
                         <Button size="sm" onClick={() => openAdjustmentDialog(deal)}>
                           Create Adjustment
