@@ -5,6 +5,7 @@ export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams
     const batchId = searchParams.get("batch") || searchParams.get("batch_id")
+    const payoutMonth = searchParams.get("payout_month")
     const status = searchParams.get("status") || "unassigned"
     const search = searchParams.get("search") || ""
 
@@ -13,8 +14,11 @@ export async function GET(request: NextRequest) {
     // Build query for events
     let query = supabase.from("csv_data").select("*")
 
+    // Filter by batch_id (legacy support) or payout_month (new)
     if (batchId && batchId !== "all") {
       query = query.eq("batch_id", batchId)
+    } else if (payoutMonth && payoutMonth !== "all") {
+      query = query.eq("payout_month", payoutMonth)
     }
 
     if (status === "pending_confirmation") {

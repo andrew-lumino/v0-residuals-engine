@@ -305,47 +305,6 @@ export function EditPendingDealModal({ event, isOpen, onClose, onComplete }: Edi
     }
   }
 
-  const handleConfirm = async () => {
-    if (!event) return
-
-    setIsLoading(true)
-    try {
-      const response = await fetch("/api/confirm-assignment", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          event_ids: [event.id],
-        }),
-      })
-
-      const data = await response.json()
-
-      if (response.ok && data.success) {
-        toast({
-          title: "Assignment Confirmed",
-          description: `Successfully confirmed assignment for ${event.merchant_name}`,
-        })
-        onClose()
-        onComplete()
-      } else {
-        toast({
-          title: "Confirmation Failed",
-          description: data.error || "Failed to confirm assignment",
-          variant: "destructive",
-        })
-      }
-    } catch (error) {
-      console.error("[v0] Error confirming assignment:", error)
-      toast({
-        title: "Error",
-        description: "An error occurred while confirming. Please try again.",
-        variant: "destructive",
-      })
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
   const addParticipant = () => {
     setParticipants([
       ...participants,
@@ -662,15 +621,12 @@ export function EditPendingDealModal({ event, isOpen, onClose, onComplete }: Edi
                 <Button variant="outline" onClick={onClose} disabled={isLoading}>
                   Cancel
                 </Button>
-                <Button onClick={handleSave} disabled={isLoading || !deal || totalSplitPct !== 100} variant="outline">
-                  {isLoading ? "Saving..." : "Save Changes"}
-                </Button>
                 <Button
-                  onClick={handleConfirm}
+                  onClick={handleSave}
                   disabled={isLoading || !deal || totalSplitPct !== 100}
                   className="bg-green-600 hover:bg-green-700 text-white"
                 >
-                  {isLoading ? "Confirming..." : "Confirm Assignment"}
+                  {isLoading ? "Saving..." : "Save Changes"}
                 </Button>
               </div>
             </>

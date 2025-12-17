@@ -53,9 +53,12 @@ export function AssignmentModal({ isOpen, onClose, events, onSave }: AssignmentM
   // Check for existing deal when events change
   useEffect(() => {
     if (isOpen && firstEvent?.mid) {
-      checkExistingDeal(firstEvent.mid)
+      // Use the event's payout_type to find matching deal for this MID+payout_type
+      const eventPayoutType = firstEvent.payout_type || "residual"
+      setPayoutType(eventPayoutType)
+      checkExistingDeal(firstEvent.mid, eventPayoutType)
     }
-  }, [isOpen, firstEvent?.mid])
+  }, [isOpen, firstEvent?.mid, firstEvent?.payout_type])
 
   const fetchPartners = async () => {
     try {
@@ -69,19 +72,18 @@ export function AssignmentModal({ isOpen, onClose, events, onSave }: AssignmentM
     }
   }
 
-  const checkExistingDeal = async (mid: string) => {
+  const checkExistingDeal = async (mid: string, payout_type: string) => {
     try {
-      const res = await fetch(`/api/residuals/deals?mid=${mid}`)
+      // Look up deal by BOTH MID and payout_type - each MID can have multiple deals
+      const res = await fetch(`/api/residuals/deals?mid=${mid}&payout_type=${payout_type}`)
       const json = await res.json()
 
       if (json.success && json.data) {
         // Pre-populate with existing deal participants
         setParticipants(json.data.participants_json)
-        setPayoutType(json.data.payout_type || "residual")
       } else {
-        // Reset if no existing deal
+        // Reset if no existing deal for this MID+payout_type
         setParticipants([])
-        setPayoutType("residual")
       }
     } catch (err) {
       console.error("Failed to check existing deal", err)

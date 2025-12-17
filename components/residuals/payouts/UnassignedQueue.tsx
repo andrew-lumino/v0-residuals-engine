@@ -1,5 +1,5 @@
 "use client"
-import { useState, useEffect, forwardRef, useImperativeHandle, useCallback } from "react"
+import { useState, useEffect, forwardRef, useImperativeHandle, useCallback, useMemo } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -103,7 +103,7 @@ export const UnassignedQueue = forwardRef<UnassignedQueueRef, UnassignedQueuePro
   const [batches, setBatches] = useState<Batch[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState("")
-  const [batchFilter, setBatchFilter] = useState("all")
+  const [monthFilter, setMonthFilter] = useState("all")
   const [activeTab, setActiveTab] = useState("unassigned")
 
   const [unassignedSortField, setUnassignedSortField] = useState<SortField>("merchant_name")
@@ -147,13 +147,24 @@ export const UnassignedQueue = forwardRef<UnassignedQueueRef, UnassignedQueuePro
     },
   }))
 
+  // Get unique payout months from batches, sorted descending (newest first)
+  const uniqueMonths = useMemo(() => {
+    const monthsSet = new Set<string>()
+    batches.forEach((batch) => {
+      if (batch.payout_month) {
+        monthsSet.add(batch.payout_month)
+      }
+    })
+    return Array.from(monthsSet).sort((a, b) => b.localeCompare(a))
+  }, [batches])
+
   const fetchData = async () => {
     setLoading(true)
     try {
       const params = new URLSearchParams({
         status: activeTab,
         search,
-        batch: batchFilter !== "all" ? batchFilter : "",
+        payout_month: monthFilter !== "all" ? monthFilter : "",
       })
 
       const [eventsRes, batchesRes] = await Promise.all([
@@ -191,7 +202,7 @@ export const UnassignedQueue = forwardRef<UnassignedQueueRef, UnassignedQueuePro
 
   useEffect(() => {
     fetchData()
-  }, [activeTab, batchFilter])
+  }, [activeTab, monthFilter])
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -719,15 +730,15 @@ export const UnassignedQueue = forwardRef<UnassignedQueueRef, UnassignedQueuePro
                   <div className="w-[200px]">
                     <Label className="text-sm font-medium">Payout Month</Label>
                     <div className="flex gap-2 mt-1">
-                      <Select value={batchFilter} onValueChange={setBatchFilter}>
+                      <Select value={monthFilter} onValueChange={setMonthFilter}>
                         <SelectTrigger>
                           <SelectValue placeholder="All Months" />
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="all">All Months</SelectItem>
-                          {batches.map((batch) => (
-                            <SelectItem key={batch.id} value={batch.batch_id}>
-                              {formatPayoutMonth(batch.payout_month)}
+                          {uniqueMonths.map((month) => (
+                            <SelectItem key={month} value={month}>
+                              {formatPayoutMonth(month)}
                             </SelectItem>
                           ))}
                         </SelectContent>

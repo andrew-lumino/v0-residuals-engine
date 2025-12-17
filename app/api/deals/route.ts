@@ -30,7 +30,15 @@ export async function POST(request: NextRequest) {
     }
 
     const supabase = await createClient()
-    const { data: existingDeal } = await supabase.from("deals").select("*").eq("mid", mid).single()
+
+    // IMPORTANT: Look up by BOTH mid AND payout_type
+    // Each MID can have multiple deals (one per payout type: residual, bonus, trueup, etc.)
+    const { data: existingDeal } = await supabase
+      .from("deals")
+      .select("*")
+      .eq("mid", mid)
+      .eq("payout_type", payout_type)
+      .single()
 
     let dealId: string
     // Use consistent short deal_id format: deal_ + 8 hex chars
@@ -74,7 +82,7 @@ export async function POST(request: NextRequest) {
         entityType: "deal",
         entityId: existingDeal.id,
         entityName: mid,
-        description: `Updated deal participants for MID ${mid}`,
+        description: `Updated deal participants for ${payout_type} on MID ${mid}`,
         previousData,
         newData: { participants_json: participants, payout_type, assigned_agent_name: assignedAgentName },
         requestId,
@@ -113,7 +121,7 @@ export async function POST(request: NextRequest) {
         entityType: "deal",
         entityId: newDeal.id,
         entityName: mid,
-        description: `Created new deal for MID ${mid} with ${participants.length} participant(s)`,
+        description: `Created new ${payout_type} deal for MID ${mid} with ${participants.length} participant(s)`,
         newData: { deal_id: dealUniqueId, mid, participants_json: participants, payout_type },
         requestId,
       })
@@ -319,10 +327,21 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ success: false, error: "MID is required" }, { status: 400 })
     }
 
-    const { data, error } = await supabase
+    const payout_type = searchParams.get("payout_type")
+
+    // Query by MID, optionally filtered by payout_type
+    // If payout_type is provided, get the exact deal for that MID+payout_type combo
+    // Otherwise, return the most recent deal for this MID (for backwards compatibility)
+    let query = supabase
       .from("deals")
       .select("*")
       .eq("mid", mid)
+
+    if (payout_type) {
+      query = query.eq("payout_type", payout_type)
+    }
+
+    const { data, error } = await query
       .order("created_at", { ascending: false })
       .limit(1)
       .single()

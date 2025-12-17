@@ -57,8 +57,8 @@ create table if not exists public.deals (
   updated_at timestamp with time zone not null default now(),
   available_to_purchase boolean not null default false,
   constraint deals_pkey primary key (id),
-  -- Ensure one active deal per MID (optional, but good practice)
-  constraint deals_mid_idx unique (mid)
+  -- Each MID can have multiple deals (one per payout_type: residual, bonus, trueup, clawback, etc.)
+  constraint deals_mid_payout_type_idx unique (mid, payout_type)
 );
 
 -- 4. CSV Data Table (Imported Events)

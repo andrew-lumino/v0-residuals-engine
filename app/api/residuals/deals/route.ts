@@ -38,8 +38,14 @@ export async function POST(request: NextRequest) {
 
     const supabase = await createClient()
 
-    // Check if deal exists for this MID
-    const { data: existingDeal } = await supabase.from("deals").select("*").eq("mid", mid).single()
+    // IMPORTANT: Look up by BOTH mid AND payout_type
+    // Each MID can have multiple deals (one per payout type: residual, bonus, trueup, etc.)
+    const { data: existingDeal } = await supabase
+      .from("deals")
+      .select("*")
+      .eq("mid", mid)
+      .eq("payout_type", payout_type)
+      .single()
 
     let dealId: string
     // Use consistent short deal_id format: deal_ + 8 hex chars (matches other endpoints)
@@ -128,11 +134,12 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Get deal by MID (for pre-populating assignment modal) or paginated list of deals
+// Get deal by MID+payout_type (for pre-populating assignment modal) or paginated list of deals
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams
     const mid = searchParams.get("mid")
+    const payout_type = searchParams.get("payout_type") // NEW: allow filtering by payout_type
     const list = searchParams.get("list")
     const page = Number.parseInt(searchParams.get("page") || "1")
     const limit = Number.parseInt(searchParams.get("limit") || "100")
@@ -226,10 +233,19 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ success: false, error: "MID is required" }, { status: 400 })
     }
 
-    const { data, error } = await supabase
+    // Query by MID, optionally filtered by payout_type
+    // If payout_type is provided, get the exact deal for that MID+payout_type combo
+    // Otherwise, return the most recent deal for this MID (for backwards compatibility)
+    let query = supabase
       .from("deals")
       .select("*")
       .eq("mid", mid)
+
+    if (payout_type) {
+      query = query.eq("payout_type", payout_type)
+    }
+
+    const { data, error } = await query
       .order("created_at", { ascending: false })
       .limit(1)
       .single()
