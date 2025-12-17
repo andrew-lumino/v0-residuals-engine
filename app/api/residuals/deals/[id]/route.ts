@@ -116,9 +116,10 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (body.participants_json && currentDeal) {
       const newParticipants = body.participants_json as any[]
       const dealUUID = data.id || currentDeal.id
+      const dealTextId = data.deal_id || currentDeal.deal_id // Text ID like "deal_abc123"
 
-      // Get all payouts for this deal
-      const { data: existingPayouts } = await supabase.from("payouts").select("*").eq("deal_id", dealUUID)
+      // Get all payouts for this deal - payouts table uses TEXT deal_id, not UUID
+      const { data: existingPayouts } = await supabase.from("payouts").select("*").eq("deal_id", dealTextId)
 
       if (existingPayouts && existingPayouts.length > 0) {
         // Group payouts by csv_data_id (each event can have multiple payouts)
@@ -193,10 +194,10 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
                 })
                 .eq("id", existingPayout.id)
             } else if (csvDataId !== "no_event") {
-              // Add new participant as a new payout
+              // Add new participant as a new payout - use TEXT deal_id for consistency
               await supabase.from("payouts").insert({
                 csv_data_id: csvDataId,
-                deal_id: dealUUID,
+                deal_id: dealTextId,
                 mid: templatePayout.mid,
                 merchant_name: templatePayout.merchant_name,
                 payout_month: templatePayout.payout_month,

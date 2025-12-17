@@ -41,6 +41,8 @@ import { toast } from "@/components/ui/use-toast"
 interface MerchantGroup {
   mid: string
   merchantName: string
+  payoutType: string // Added to distinguish different payout types for same MID
+  groupKey: string // Unique key: mid_payoutType
   payouts: any[]
   totalAmount: number
   paidAmount: number
@@ -129,9 +131,12 @@ export default function ByMerchantPage() {
 
         console.log("[v0] Filtered payouts:", filteredPayouts.length)
 
+        // Group by MID + payout_type so different payout types show separately
         const grouped = new Map<string, any[]>()
         filteredPayouts.forEach((payout: any) => {
-          const key = payout.mid || "Unknown"
+          const mid = payout.mid || "Unknown"
+          const payoutType = payout.payout_type || "residual"
+          const key = `${mid}_${payoutType}` // Group by MID + payout type
           if (!grouped.has(key)) {
             grouped.set(key, [])
           }
@@ -140,18 +145,24 @@ export default function ByMerchantPage() {
 
         console.log("[v0] Grouped merchants:", grouped.size)
 
-        const merchantGroups: MerchantGroup[] = Array.from(grouped.entries()).map(([mid, payouts]) => ({
-          mid,
-          merchantName: payouts[0]?.merchant_name || "Unknown Merchant",
-          payouts,
-          totalAmount: payouts.reduce((sum, p) => sum + (Number.parseFloat(p.partner_payout_amount) || 0), 0),
-          paidAmount: payouts
-            .filter((p) => p.paid_status === "paid")
-            .reduce((sum, p) => sum + (Number.parseFloat(p.partner_payout_amount) || 0), 0),
-          participantCount: new Set(payouts.map((p) => p.partner_airtable_id)).size,
-          dealId: payouts[0]?.deal_id_from_deals || null,
-          availableForPurchase: payouts[0]?.available_to_purchase || false,
-        }))
+        const merchantGroups: MerchantGroup[] = Array.from(grouped.entries()).map(([groupKey, payouts]) => {
+          const mid = payouts[0]?.mid || "Unknown"
+          const payoutType = payouts[0]?.payout_type || "residual"
+          return {
+            groupKey,
+            mid,
+            payoutType,
+            merchantName: payouts[0]?.merchant_name || "Unknown Merchant",
+            payouts,
+            totalAmount: payouts.reduce((sum, p) => sum + (Number.parseFloat(p.partner_payout_amount) || 0), 0),
+            paidAmount: payouts
+              .filter((p) => p.paid_status === "paid")
+              .reduce((sum, p) => sum + (Number.parseFloat(p.partner_payout_amount) || 0), 0),
+            participantCount: new Set(payouts.map((p) => p.partner_airtable_id)).size,
+            dealId: payouts[0]?.deal_id_from_deals || null,
+            availableForPurchase: payouts[0]?.available_to_purchase || false,
+          }
+        })
 
         merchantGroups.sort((a, b) => b.totalAmount - a.totalAmount)
         setMerchants(merchantGroups)
@@ -174,13 +185,13 @@ export default function ByMerchantPage() {
     return () => clearTimeout(timer)
   }, [search])
 
-  const toggleExpanded = (mid: string) => {
+  const toggleExpanded = (groupKey: string) => {
     setExpandedMerchants((prev) => {
       const next = new Set(prev)
-      if (next.has(mid)) {
-        next.delete(mid)
+      if (next.has(groupKey)) {
+        next.delete(groupKey)
       } else {
-        next.add(mid)
+        next.add(groupKey)
       }
       return next
     })
@@ -464,16 +475,16 @@ export default function ByMerchantPage() {
         <div className="space-y-4">
           {merchants.map((merchant) => (
             <Collapsible
-              key={merchant.mid}
-              open={expandedMerchants.has(merchant.mid)}
-              onOpenChange={() => toggleExpanded(merchant.mid)}
+              key={merchant.groupKey}
+              open={expandedMerchants.has(merchant.groupKey)}
+              onOpenChange={() => toggleExpanded(merchant.groupKey)}
             >
               <Card>
                 <CollapsibleTrigger asChild>
                   <CardHeader className="cursor-pointer hover:bg-muted/50 transition-colors">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
-                        {expandedMerchants.has(merchant.mid) ? (
+                        {expandedMerchants.has(merchant.groupKey) ? (
                           <ChevronDown className="h-5 w-5 text-muted-foreground" />
                         ) : (
                           <ChevronRight className="h-5 w-5 text-muted-foreground" />
@@ -481,6 +492,9 @@ export default function ByMerchantPage() {
                         <div>
                           <div className="flex items-center gap-2">
                             <CardTitle>{merchant.merchantName}</CardTitle>
+                            <Badge variant="outline" className="capitalize">
+                              {merchant.payoutType}
+                            </Badge>
                             {merchant.availableForPurchase && (
                               <Badge variant="default" className="bg-green-600 hover:bg-green-700">
                                 Available for Purchase
@@ -517,22 +531,22 @@ export default function ByMerchantPage() {
                     <Table>
                       <TableHeader>
                         <TableRow>
-                          <SortableHeader merchantMid={merchant.mid} field="partner_name" label="Partner" />
-                          <SortableHeader merchantMid={merchant.mid} field="partner_role" label="Role" />
-                          <SortableHeader merchantMid={merchant.mid} field="payout_month" label="Month" />
-                          <SortableHeader merchantMid={merchant.mid} field="partner_split_pct" label="Split %" />
+                          <SortableHeader merchantMid={merchant.groupKey} field="partner_name" label="Partner" />
+                          <SortableHeader merchantMid={merchant.groupKey} field="partner_role" label="Role" />
+                          <SortableHeader merchantMid={merchant.groupKey} field="payout_month" label="Month" />
+                          <SortableHeader merchantMid={merchant.groupKey} field="partner_split_pct" label="Split %" />
                           <SortableHeader
-                            merchantMid={merchant.mid}
+                            merchantMid={merchant.groupKey}
                             field="partner_payout_amount"
                             label="Amount"
                             className="text-right"
                           />
-                          <SortableHeader merchantMid={merchant.mid} field="paid_status" label="Status" />
+                          <SortableHeader merchantMid={merchant.groupKey} field="paid_status" label="Status" />
                           <TableHead className="w-[100px]">Actions</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {getSortedPayouts(merchant.mid, merchant.payouts).map((payout) => (
+                        {getSortedPayouts(merchant.groupKey, merchant.payouts).map((payout) => (
                           <TableRow key={payout.id}>
                             <TableCell className="font-medium">{getPartnerName(payout)}</TableCell>
                             <TableCell>
