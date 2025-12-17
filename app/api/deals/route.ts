@@ -304,28 +304,25 @@ export async function GET(request: NextRequest) {
       // If confirmedOnly=true, filter out deals that have NO confirmed events
       // (i.e., only show deals that have at least one confirmed csv_data event)
       if (confirmedOnly) {
-        const dealIds = dealsWithMerchants.map((d) => d.id).filter(Boolean)
+        // Get ALL deal_ids that have at least one confirmed event
+        const { data: confirmedDealIds } = await supabase
+          .from("csv_data")
+          .select("deal_id")
+          .eq("assignment_status", "confirmed")
+          .not("deal_id", "is", null)
 
-        if (dealIds.length > 0) {
-          // Get count of confirmed events per deal
-          const { data: confirmedCounts } = await supabase
-            .from("csv_data")
-            .select("deal_id")
-            .in("deal_id", dealIds)
-            .eq("assignment_status", "confirmed")
+        // Create a set of deal IDs (as strings) that have confirmed events
+        const dealsWithConfirmedEvents = new Set(
+          (confirmedDealIds || []).map((c) => String(c.deal_id))
+        )
 
-          // Create a set of deal IDs that have at least one confirmed event
-          const dealsWithConfirmedEvents = new Set(
-            (confirmedCounts || []).map((c) => c.deal_id)
-          )
-
-          // Filter to only include deals with confirmed events
-          combinedResults = combinedResults.filter((deal) => {
-            // Keep pending items (synthetic) if needed, but filter real deals
-            if (deal.is_pending) return false // Don't include pending items in confirmedOnly mode
-            return dealsWithConfirmedEvents.has(deal.id)
-          })
-        }
+        // Filter to only include deals with confirmed events
+        combinedResults = combinedResults.filter((deal) => {
+          // Exclude synthetic pending items in confirmedOnly mode
+          if (deal.is_pending) return false
+          // Check if this deal has confirmed events (compare as strings)
+          return dealsWithConfirmedEvents.has(String(deal.id))
+        })
       }
 
       if (search) {
