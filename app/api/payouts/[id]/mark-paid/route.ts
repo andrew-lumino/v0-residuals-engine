@@ -24,7 +24,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       .update({
         paid_status: newStatus,
         paid_at: newStatus === "paid" ? new Date().toISOString() : null,
-        paid_by: newStatus === "paid" ? "manual" : null,
       })
       .eq("id", id)
 

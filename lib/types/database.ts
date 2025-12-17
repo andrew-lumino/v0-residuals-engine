@@ -46,7 +46,6 @@ export interface CsvData {
   adjustment_type: AdjustmentType | null
   adjusts_payout_id: string | null
   paid_at: string | null
-  paid_by: string | null
   paid_status: PaidStatus
 }
 

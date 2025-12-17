@@ -238,8 +238,9 @@ export function ConfirmedDealViewer({ event, events, isOpen = false, onClose, on
       console.log("[v0] Deleting confirmed event:", event.id)
 
       // Use /delete endpoint which handles confirmed events (not the base endpoint which only handles unassigned/pending)
+      // NOTE: Using POST because DELETE on /delete route was being caught by parent [id] route's DELETE handler
       const response = await fetch(`/api/unassigned-events/${event.id}/delete`, {
-        method: "DELETE",
+        method: "POST",
       })
 
       console.log("[v0] Delete response status:", response.status)
@@ -733,7 +734,10 @@ export function ConfirmedDealViewer({ event, events, isOpen = false, onClose, on
           <AlertDialogFooter>
             <AlertDialogCancel onClick={() => setDeleteConfirmText("")}>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={handleDelete}
+              onClick={(e) => {
+                e.preventDefault() // Prevent dialog from closing before async operation completes
+                handleDelete()
+              }}
               disabled={deleteConfirmText !== "DELETE" || isLoading}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >

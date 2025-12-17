@@ -577,6 +577,8 @@ export function EditPendingDealModal({ event, isOpen, onClose, onComplete }: Edi
           {!dealMissing && (
             <>
               <div className="flex gap-2">
+                {/* REMOVED: Reject button - user requested removal from pending confirmation section
+                   The handleReject function is kept in case it needs to be re-enabled later.
                 <Button
                   variant="outline"
                   onClick={handleReject}
@@ -586,6 +588,7 @@ export function EditPendingDealModal({ event, isOpen, onClose, onComplete }: Edi
                   <RotateCcw className="h-4 w-4" />
                   Reject (Back to Unassigned)
                 </Button>
+                */}
                 <AlertDialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
                   <AlertDialogTrigger asChild>
                     <Button variant="destructive" disabled={isLoading} className="gap-2">

@@ -2,7 +2,9 @@ import { createClient } from "@/lib/db/server"
 import { type NextRequest, NextResponse } from "next/server"
 import { logActionAsync } from "@/lib/utils/history"
 
-export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+// Using POST instead of DELETE because DELETE /api/unassigned-events/[id]/delete
+// was being caught by the parent route /api/unassigned-events/[id] DELETE handler
+export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
 
   try {

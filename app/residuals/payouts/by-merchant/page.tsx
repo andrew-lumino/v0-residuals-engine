@@ -38,10 +38,8 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { formatPayoutMonth } from "@/lib/utils/formatters"
 import { toast } from "@/components/ui/use-toast"
 
-interface MerchantGroup {
-  mid: string
-  merchantName: string
-  payoutType: string // Added to distinguish different payout types for same MID
+interface PayoutTypeGroup {
+  payoutType: string
   groupKey: string // Unique key: mid_payoutType
   payouts: any[]
   totalAmount: number
@@ -49,6 +47,16 @@ interface MerchantGroup {
   participantCount: number
   dealId: string | null
   availableForPurchase: boolean
+}
+
+interface MerchantGroup {
+  mid: string
+  merchantName: string
+  payoutTypeGroups: PayoutTypeGroup[] // Nested groups by payout type
+  totalAmount: number
+  paidAmount: number
+  participantCount: number
+  payoutCount: number
 }
 
 type SortField =
@@ -66,10 +74,11 @@ export default function ByMerchantPage() {
   const [search, setSearch] = useState("")
   const [monthFilter, setMonthFilter] = useState("all")
   const [statusFilter, setStatusFilter] = useState("all")
-  const [expandedMerchants, setExpandedMerchants] = useState<Set<string>>(new Set())
+  const [expandedMerchants, setExpandedMerchants] = useState<Set<string>>(new Set()) // Parent merchant dropdowns
+  const [expandedPayoutTypes, setExpandedPayoutTypes] = useState<Set<string>>(new Set()) // Nested payout type dropdowns
   const [months, setMonths] = useState<string[]>([])
   const [partnersMap, setPartnersMap] = useState<Map<string, any>>(new Map())
-  const [editingMerchant, setEditingMerchant] = useState<MerchantGroup | null>(null)
+  const [editingPayoutGroup, setEditingPayoutGroup] = useState<{ merchant: MerchantGroup; payoutGroup: PayoutTypeGroup } | null>(null)
   const [savingAvailability, setSavingAvailability] = useState(false)
   const [editMid, setEditMid] = useState("")
   const [editMerchantName, setEditMerchantName] = useState("")
@@ -131,28 +140,34 @@ export default function ByMerchantPage() {
 
         console.log("[v0] Filtered payouts:", filteredPayouts.length)
 
-        // Group by MID + payout_type so different payout types show separately
-        const grouped = new Map<string, any[]>()
+        // Step 1: Group by MID first (parent level)
+        const groupedByMid = new Map<string, any[]>()
         filteredPayouts.forEach((payout: any) => {
           const mid = payout.mid || "Unknown"
-          const payoutType = payout.payout_type || "residual"
-          const key = `${mid}_${payoutType}` // Group by MID + payout type
-          if (!grouped.has(key)) {
-            grouped.set(key, [])
+          if (!groupedByMid.has(mid)) {
+            groupedByMid.set(mid, [])
           }
-          grouped.get(key)!.push(payout)
+          groupedByMid.get(mid)!.push(payout)
         })
 
-        console.log("[v0] Grouped merchants:", grouped.size)
+        console.log("[v0] Grouped by MID:", groupedByMid.size)
 
-        const merchantGroups: MerchantGroup[] = Array.from(grouped.entries()).map(([groupKey, payouts]) => {
-          const mid = payouts[0]?.mid || "Unknown"
-          const payoutType = payouts[0]?.payout_type || "residual"
-          return {
-            groupKey,
-            mid,
+        // Step 2: For each MID, create nested payout type groups
+        const merchantGroups: MerchantGroup[] = Array.from(groupedByMid.entries()).map(([mid, midPayouts]) => {
+          // Group this MID's payouts by payout_type
+          const groupedByType = new Map<string, any[]>()
+          midPayouts.forEach((payout: any) => {
+            const payoutType = payout.payout_type || "residual"
+            if (!groupedByType.has(payoutType)) {
+              groupedByType.set(payoutType, [])
+            }
+            groupedByType.get(payoutType)!.push(payout)
+          })
+
+          // Create PayoutTypeGroup for each payout type
+          const payoutTypeGroups: PayoutTypeGroup[] = Array.from(groupedByType.entries()).map(([payoutType, payouts]) => ({
             payoutType,
-            merchantName: payouts[0]?.merchant_name || "Unknown Merchant",
+            groupKey: `${mid}_${payoutType}`,
             payouts,
             totalAmount: payouts.reduce((sum, p) => sum + (Number.parseFloat(p.partner_payout_amount) || 0), 0),
             paidAmount: payouts
@@ -161,6 +176,25 @@ export default function ByMerchantPage() {
             participantCount: new Set(payouts.map((p) => p.partner_airtable_id)).size,
             dealId: payouts[0]?.deal_id_from_deals || null,
             availableForPurchase: payouts[0]?.available_to_purchase || false,
+          }))
+
+          // Sort payout types: residual first, then alphabetically
+          payoutTypeGroups.sort((a, b) => {
+            if (a.payoutType === "residual") return -1
+            if (b.payoutType === "residual") return 1
+            return a.payoutType.localeCompare(b.payoutType)
+          })
+
+          return {
+            mid,
+            merchantName: midPayouts[0]?.merchant_name || "Unknown Merchant",
+            payoutTypeGroups,
+            totalAmount: midPayouts.reduce((sum, p) => sum + (Number.parseFloat(p.partner_payout_amount) || 0), 0),
+            paidAmount: midPayouts
+              .filter((p) => p.paid_status === "paid")
+              .reduce((sum, p) => sum + (Number.parseFloat(p.partner_payout_amount) || 0), 0),
+            participantCount: new Set(midPayouts.map((p) => p.partner_airtable_id)).size,
+            payoutCount: midPayouts.length,
           }
         })
 
@@ -185,8 +219,20 @@ export default function ByMerchantPage() {
     return () => clearTimeout(timer)
   }, [search])
 
-  const toggleExpanded = (groupKey: string) => {
+  const toggleMerchantExpanded = (mid: string) => {
     setExpandedMerchants((prev) => {
+      const next = new Set(prev)
+      if (next.has(mid)) {
+        next.delete(mid)
+      } else {
+        next.add(mid)
+      }
+      return next
+    })
+  }
+
+  const togglePayoutTypeExpanded = (groupKey: string) => {
+    setExpandedPayoutTypes((prev) => {
       const next = new Set(prev)
       if (next.has(groupKey)) {
         next.delete(groupKey)
@@ -202,22 +248,22 @@ export default function ByMerchantPage() {
     return partner?.name || payout.partner_role || payout.partner_airtable_id || "Unknown"
   }
 
-  const handleEditMerchant = (merchant: MerchantGroup, e: React.MouseEvent) => {
+  const handleEditPayoutGroup = (merchant: MerchantGroup, payoutGroup: PayoutTypeGroup, e: React.MouseEvent) => {
     e.stopPropagation() // Prevent collapsible from toggling
-    setEditingMerchant(merchant)
+    setEditingPayoutGroup({ merchant, payoutGroup })
     setEditMid(merchant.mid)
     setEditMerchantName(merchant.merchantName)
   }
 
   const toggleAvailableForPurchase = async (newValue: boolean) => {
-    if (!editingMerchant?.dealId) {
-      console.error("[v0] No deal ID found for merchant")
+    if (!editingPayoutGroup?.payoutGroup.dealId) {
+      console.error("[v0] No deal ID found for payout group")
       return
     }
 
     setSavingAvailability(true)
     try {
-      const response = await fetch(`/api/residuals/deals/${editingMerchant.dealId}`, {
+      const response = await fetch(`/api/residuals/deals/${editingPayoutGroup.payoutGroup.dealId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ available_to_purchase: newValue }),
@@ -225,11 +271,25 @@ export default function ByMerchantPage() {
 
       const data = await response.json()
       if (data.success) {
-        // Update local state optimistically
+        // Update local state - update the specific payout group's availability
         setMerchants((prev) =>
-          prev.map((m) => (m.mid === editingMerchant.mid ? { ...m, availableForPurchase: newValue } : m)),
+          prev.map((m) => {
+            if (m.mid === editingPayoutGroup.merchant.mid) {
+              return {
+                ...m,
+                payoutTypeGroups: m.payoutTypeGroups.map((ptg) =>
+                  ptg.groupKey === editingPayoutGroup.payoutGroup.groupKey
+                    ? { ...ptg, availableForPurchase: newValue }
+                    : ptg
+                ),
+              }
+            }
+            return m
+          }),
         )
-        setEditingMerchant((prev) => (prev ? { ...prev, availableForPurchase: newValue } : null))
+        setEditingPayoutGroup((prev) =>
+          prev ? { ...prev, payoutGroup: { ...prev.payoutGroup, availableForPurchase: newValue } } : null,
+        )
       } else {
         console.error("[v0] Failed to update availability:", data.error)
       }
@@ -241,7 +301,7 @@ export default function ByMerchantPage() {
   }
 
   const handleSaveMerchantDetails = async () => {
-    if (!editingMerchant) return
+    if (!editingPayoutGroup) return
 
     setSavingMerchant(true)
     try {
@@ -249,7 +309,7 @@ export default function ByMerchantPage() {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          oldMid: editingMerchant.mid,
+          oldMid: editingPayoutGroup.merchant.mid,
           newMid: editMid,
           newMerchantName: editMerchantName,
         }),
@@ -262,7 +322,7 @@ export default function ByMerchantPage() {
         title: "Merchant updated",
         description: `Updated ${result.payoutsUpdated} payout records`,
       })
-      setEditingMerchant(null)
+      setEditingPayoutGroup(null)
       fetchMerchants()
     } catch (error) {
       toast({
@@ -475,16 +535,17 @@ export default function ByMerchantPage() {
         <div className="space-y-4">
           {merchants.map((merchant) => (
             <Collapsible
-              key={merchant.groupKey}
-              open={expandedMerchants.has(merchant.groupKey)}
-              onOpenChange={() => toggleExpanded(merchant.groupKey)}
+              key={merchant.mid}
+              open={expandedMerchants.has(merchant.mid)}
+              onOpenChange={() => toggleMerchantExpanded(merchant.mid)}
             >
               <Card>
+                {/* Parent Level: Merchant Card */}
                 <CollapsibleTrigger asChild>
                   <CardHeader className="cursor-pointer hover:bg-muted/50 transition-colors">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
-                        {expandedMerchants.has(merchant.groupKey) ? (
+                        {expandedMerchants.has(merchant.mid) ? (
                           <ChevronDown className="h-5 w-5 text-muted-foreground" />
                         ) : (
                           <ChevronRight className="h-5 w-5 text-muted-foreground" />
@@ -492,22 +553,16 @@ export default function ByMerchantPage() {
                         <div>
                           <div className="flex items-center gap-2">
                             <CardTitle>{merchant.merchantName}</CardTitle>
-                            <Badge variant="outline" className="capitalize">
-                              {merchant.payoutType}
-                            </Badge>
-                            {merchant.availableForPurchase && (
-                              <Badge variant="default" className="bg-green-600 hover:bg-green-700">
-                                Available for Purchase
+                            {merchant.payoutTypeGroups.length > 1 && (
+                              <Badge variant="secondary">
+                                {merchant.payoutTypeGroups.length} deal types
                               </Badge>
                             )}
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7"
-                              onClick={(e) => handleEditMerchant(merchant, e)}
-                            >
-                              <Pencil className="h-4 w-4" />
-                            </Button>
+                            {merchant.payoutTypeGroups.length === 1 && (
+                              <Badge variant="outline" className="capitalize">
+                                {merchant.payoutTypeGroups[0].payoutType}
+                              </Badge>
+                            )}
                           </div>
                           <CardDescription>MID: {merchant.mid}</CardDescription>
                         </div>
@@ -522,53 +577,105 @@ export default function ByMerchantPage() {
                       </div>
                     </div>
                     <div className="text-sm text-muted-foreground mt-2">
-                      {merchant.payouts.length} payout records • {merchant.participantCount} participants
+                      {merchant.payoutCount} payout records • {merchant.participantCount} participants
                     </div>
                   </CardHeader>
                 </CollapsibleTrigger>
                 <CollapsibleContent>
-                  <CardContent className="pt-0">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <SortableHeader merchantMid={merchant.groupKey} field="partner_name" label="Partner" />
-                          <SortableHeader merchantMid={merchant.groupKey} field="partner_role" label="Role" />
-                          <SortableHeader merchantMid={merchant.groupKey} field="payout_month" label="Month" />
-                          <SortableHeader merchantMid={merchant.groupKey} field="partner_split_pct" label="Split %" />
-                          <SortableHeader
-                            merchantMid={merchant.groupKey}
-                            field="partner_payout_amount"
-                            label="Amount"
-                            className="text-right"
-                          />
-                          <SortableHeader merchantMid={merchant.groupKey} field="paid_status" label="Status" />
-                          <TableHead className="w-[100px]">Actions</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {getSortedPayouts(merchant.groupKey, merchant.payouts).map((payout) => (
-                          <TableRow key={payout.id}>
-                            <TableCell className="font-medium">{getPartnerName(payout)}</TableCell>
-                            <TableCell>
-                              <Badge variant="secondary">{payout.partner_role || "Agent"}</Badge>
-                            </TableCell>
-                            <TableCell>{formatPayoutMonth(payout.payout_month)}</TableCell>
-                            <TableCell>{payout.partner_split_pct}%</TableCell>
-                            <TableCell className="text-right font-semibold">
-                              <MoneyDisplay amount={payout.partner_payout_amount} />
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant={payout.paid_status === "paid" ? "default" : "secondary"}>
-                                {payout.paid_status}
-                              </Badge>
-                            </TableCell>
-                            <TableCell>
-                              <EditPayoutButton payout={payout} onUpdate={fetchMerchants} />
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
+                  <CardContent className="pt-0 space-y-4">
+                    {/* Nested Level: Payout Type Groups */}
+                    {merchant.payoutTypeGroups.map((payoutGroup) => (
+                      <Collapsible
+                        key={payoutGroup.groupKey}
+                        open={expandedPayoutTypes.has(payoutGroup.groupKey)}
+                        onOpenChange={() => togglePayoutTypeExpanded(payoutGroup.groupKey)}
+                      >
+                        <div className="border rounded-lg">
+                          <CollapsibleTrigger asChild>
+                            <div className="p-4 cursor-pointer hover:bg-muted/30 transition-colors">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                  {expandedPayoutTypes.has(payoutGroup.groupKey) ? (
+                                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                                  ) : (
+                                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                                  )}
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-semibold capitalize">{payoutGroup.payoutType}</span>
+                                    {payoutGroup.availableForPurchase && (
+                                      <Badge variant="default" className="bg-green-600 hover:bg-green-700 text-xs">
+                                        Available
+                                      </Badge>
+                                    )}
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-6 w-6"
+                                      onClick={(e) => handleEditPayoutGroup(merchant, payoutGroup, e)}
+                                    >
+                                      <Pencil className="h-3 w-3" />
+                                    </Button>
+                                  </div>
+                                </div>
+                                <div className="text-right">
+                                  <div className={`font-bold ${payoutGroup.totalAmount < 0 ? "text-red-500" : ""}`}>
+                                    <MoneyDisplay amount={payoutGroup.totalAmount} />
+                                  </div>
+                                  <div className="text-xs text-muted-foreground">
+                                    {payoutGroup.payouts.length} payouts • {payoutGroup.participantCount} participants
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent>
+                            <div className="border-t p-4">
+                              <Table>
+                                <TableHeader>
+                                  <TableRow>
+                                    <SortableHeader merchantMid={payoutGroup.groupKey} field="partner_name" label="Partner" />
+                                    <SortableHeader merchantMid={payoutGroup.groupKey} field="partner_role" label="Role" />
+                                    <SortableHeader merchantMid={payoutGroup.groupKey} field="payout_month" label="Month" />
+                                    <SortableHeader merchantMid={payoutGroup.groupKey} field="partner_split_pct" label="Split %" />
+                                    <SortableHeader
+                                      merchantMid={payoutGroup.groupKey}
+                                      field="partner_payout_amount"
+                                      label="Amount"
+                                      className="text-right"
+                                    />
+                                    <SortableHeader merchantMid={payoutGroup.groupKey} field="paid_status" label="Status" />
+                                    <TableHead className="w-[100px]">Actions</TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {getSortedPayouts(payoutGroup.groupKey, payoutGroup.payouts).map((payout) => (
+                                    <TableRow key={payout.id}>
+                                      <TableCell className="font-medium">{getPartnerName(payout)}</TableCell>
+                                      <TableCell>
+                                        <Badge variant="secondary">{payout.partner_role || "Agent"}</Badge>
+                                      </TableCell>
+                                      <TableCell>{formatPayoutMonth(payout.payout_month)}</TableCell>
+                                      <TableCell>{payout.partner_split_pct}%</TableCell>
+                                      <TableCell className="text-right font-semibold">
+                                        <MoneyDisplay amount={payout.partner_payout_amount} />
+                                      </TableCell>
+                                      <TableCell>
+                                        <Badge variant={payout.paid_status === "paid" ? "default" : "secondary"}>
+                                          {payout.paid_status}
+                                        </Badge>
+                                      </TableCell>
+                                      <TableCell>
+                                        <EditPayoutButton payout={payout} onUpdate={fetchMerchants} />
+                                      </TableCell>
+                                    </TableRow>
+                                  ))}
+                                </TableBody>
+                              </Table>
+                            </div>
+                          </CollapsibleContent>
+                        </div>
+                      </Collapsible>
+                    ))}
                   </CardContent>
                 </CollapsibleContent>
               </Card>
@@ -577,14 +684,17 @@ export default function ByMerchantPage() {
         </div>
       )}
 
-      <Dialog open={editingMerchant !== null} onOpenChange={(open) => !open && setEditingMerchant(null)}>
+      <Dialog open={editingPayoutGroup !== null} onOpenChange={(open) => !open && setEditingPayoutGroup(null)}>
         <DialogContent style={{ width: "900px", maxWidth: "95vw" }} className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <div className="flex items-center gap-2">
               <Store className="h-5 w-5 text-muted-foreground" />
-              <DialogTitle className="text-lg">{editingMerchant?.merchantName}</DialogTitle>
+              <DialogTitle className="text-lg">{editingPayoutGroup?.merchant.merchantName}</DialogTitle>
+              <Badge variant="outline" className="capitalize">
+                {editingPayoutGroup?.payoutGroup.payoutType}
+              </Badge>
             </div>
-            <DialogDescription>Merchant details and associated deals</DialogDescription>
+            <DialogDescription>Merchant details and deal information</DialogDescription>
           </DialogHeader>
 
           {/* Merchant Information Card */}
@@ -612,9 +722,9 @@ export default function ByMerchantPage() {
             </div>
             <div className="grid grid-cols-2 gap-4 pt-2">
               <div>
-                <p className="text-sm text-muted-foreground">Total Revenue</p>
+                <p className="text-sm text-muted-foreground">Deal Total</p>
                 <p className="font-medium text-sm">
-                  <MoneyDisplay amount={editingMerchant?.totalAmount || 0} />
+                  <MoneyDisplay amount={editingPayoutGroup?.payoutGroup.totalAmount || 0} />
                 </p>
               </div>
               <div>
@@ -627,13 +737,13 @@ export default function ByMerchantPage() {
             <div className="flex items-center justify-between pt-2 border-t">
               <div className="flex items-center gap-2 text-muted-foreground">
                 <Users className="h-4 w-4" />
-                <span className="text-sm">{editingMerchant?.participantCount} participants</span>
+                <span className="text-sm">{editingPayoutGroup?.payoutGroup.participantCount} participants</span>
               </div>
-              {editingMerchant?.dealId ? (
+              {editingPayoutGroup?.payoutGroup.dealId ? (
                 <div className="flex items-center gap-2">
                   <Checkbox
                     id="available-purchase"
-                    checked={editingMerchant.availableForPurchase}
+                    checked={editingPayoutGroup.payoutGroup.availableForPurchase}
                     onCheckedChange={(checked) => toggleAvailableForPurchase(checked as boolean)}
                     disabled={savingAvailability}
                   />
@@ -647,11 +757,11 @@ export default function ByMerchantPage() {
             </div>
           </div>
 
-          {/* Deals Summary Card */}
+          {/* Deal Summary Card */}
           <div className="border rounded-lg p-4 space-y-4">
             <div>
-              <h3 className="font-semibold text-base">Deals Summary</h3>
-              <p className="text-sm text-muted-foreground">All deals associated with this merchant</p>
+              <h3 className="font-semibold text-base">Deal Summary</h3>
+              <p className="text-sm text-muted-foreground">Deal information for this payout type</p>
             </div>
             <Table>
               <TableHeader>
@@ -659,29 +769,27 @@ export default function ByMerchantPage() {
                   <TableHead>Deal ID</TableHead>
                   <TableHead>Payout Type</TableHead>
                   <TableHead>Participants</TableHead>
-                  <TableHead>Split Total</TableHead>
+                  <TableHead>Payouts</TableHead>
                   <TableHead>Available</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {editingMerchant?.dealId ? (
+                {editingPayoutGroup?.payoutGroup.dealId ? (
                   <TableRow>
-                    <TableCell className="font-mono text-sm">{editingMerchant.dealId.substring(0, 12)}...</TableCell>
+                    <TableCell className="font-mono text-sm">{editingPayoutGroup.payoutGroup.dealId.substring(0, 12)}...</TableCell>
                     <TableCell>
-                      <Badge variant="outline">Residual</Badge>
+                      <Badge variant="outline" className="capitalize">{editingPayoutGroup.payoutGroup.payoutType}</Badge>
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1">
                         <Users className="h-4 w-4 text-muted-foreground" />
-                        {editingMerchant.participantCount}
+                        {editingPayoutGroup.payoutGroup.participantCount}
                       </div>
                     </TableCell>
-                    <TableCell>
-                      <Badge variant="secondary">100%</Badge>
-                    </TableCell>
+                    <TableCell>{editingPayoutGroup.payoutGroup.payouts.length}</TableCell>
                     <TableCell>
                       <Checkbox
-                        checked={editingMerchant.availableForPurchase}
+                        checked={editingPayoutGroup.payoutGroup.availableForPurchase}
                         onCheckedChange={(checked) => toggleAvailableForPurchase(checked as boolean)}
                         disabled={savingAvailability}
                       />
@@ -690,7 +798,7 @@ export default function ByMerchantPage() {
                 ) : (
                   <TableRow>
                     <TableCell colSpan={5} className="text-center text-muted-foreground py-4">
-                      No deals found for this merchant
+                      No deal found for this payout type
                     </TableCell>
                   </TableRow>
                 )}
@@ -699,7 +807,7 @@ export default function ByMerchantPage() {
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setEditingMerchant(null)}>
+            <Button variant="outline" onClick={() => setEditingPayoutGroup(null)}>
               Cancel
             </Button>
             <Button onClick={handleSaveMerchantDetails} disabled={savingMerchant}>

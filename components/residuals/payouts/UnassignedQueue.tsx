@@ -364,14 +364,36 @@ export const UnassignedQueue = forwardRef<UnassignedQueueRef, UnassignedQueuePro
     if (!eventToDelete) return
     setDeleting(true)
     try {
-      const res = await fetch(`/api/unassigned-events/${eventToDelete.id}`, {
-        method: "DELETE",
-      })
+      // For confirmed events, use the /delete endpoint with POST (to bypass parent route's status check)
+      // For unassigned/pending events, use the regular DELETE endpoint
+      const isConfirmed = eventToDelete.assignment_status === "confirmed"
+      const url = isConfirmed
+        ? `/api/unassigned-events/${eventToDelete.id}/delete`
+        : `/api/unassigned-events/${eventToDelete.id}`
+      const method = isConfirmed ? "POST" : "DELETE"
+
+      const res = await fetch(url, { method })
       if (res.ok) {
+        toast({
+          title: "Deleted",
+          description: `Successfully deleted event`,
+        })
         fetchData()
+      } else {
+        const data = await res.json()
+        toast({
+          title: "Delete Failed",
+          description: data.error || "Failed to delete event",
+          variant: "destructive",
+        })
       }
     } catch (error) {
       console.error("Failed to delete event:", error)
+      toast({
+        title: "Error",
+        description: "An unexpected error occurred",
+        variant: "destructive",
+      })
     } finally {
       setDeleting(false)
       setDeleteDialogOpen(false)

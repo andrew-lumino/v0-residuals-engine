@@ -28,7 +28,6 @@ export async function POST(request: NextRequest) {
       .update({
         paid_status: "paid",
         paid_at: new Date().toISOString(),
-        paid_by: "system",
       })
       .eq("partner_airtable_id", partnerId)
       .eq("payout_month", month)

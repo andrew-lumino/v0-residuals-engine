@@ -232,9 +232,15 @@ export default function AdjustmentsPage() {
         const json = await res.json()
 
         if (json.success && json.data) {
-          // ** CHANGE: Include both adjustment AND participant_merge types **
+          // Include assignment, deal, participant_merge, and adjustment types
+          // NOTE: "adjustment" entity_type doesn't exist yet - adjustments are logged as "assignment" or "deal" updates
           const relevantHistory: HistoryItem[] = json.data
-            .filter((a: any) => a.entity_type === "adjustment" || a.entity_type === "participant_merge")
+            .filter((a: any) =>
+              a.entity_type === "adjustment" ||
+              a.entity_type === "participant_merge" ||
+              a.entity_type === "assignment" ||
+              a.entity_type === "deal"
+            )
             .map((a: any) => {
               if (a.entity_type === "participant_merge") {
                 // Transform merge entry
@@ -248,17 +254,17 @@ export default function AdjustmentsPage() {
                   created_at: a.created_at,
                 }
               } else {
-                // Transform adjustment entry
+                // Transform adjustment/assignment/deal entry
                 return {
                   id: a.id,
                   type: "adjustment" as const,
                   deal_id: a.new_data?.deal_id || a.entity_id,
-                  participant_id: a.new_data?.participant_id || "",
-                  participant_name: a.new_data?.participant_name || "",
-                  old_split_pct: a.new_data?.old_split_pct || 0,
-                  new_split_pct: a.new_data?.new_split_pct || 0,
+                  participant_id: a.new_data?.participant_id || a.new_data?.partner_airtable_id || "",
+                  participant_name: a.new_data?.participant_name || a.new_data?.partner_name || a.entity_name || "",
+                  old_split_pct: a.previous_data?.split_pct || a.new_data?.old_split_pct || 0,
+                  new_split_pct: a.new_data?.split_pct || a.new_data?.new_split_pct || 0,
                   adjustment_amount: a.new_data?.adjustment_amount || 0,
-                  adjustment_type: a.new_data?.adjustment_type || "additional",
+                  adjustment_type: a.new_data?.adjustment_type || "update",
                   note: a.new_data?.note || a.description || "",
                   created_at: a.created_at,
                 }

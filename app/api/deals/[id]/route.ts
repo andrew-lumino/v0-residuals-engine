@@ -195,28 +195,45 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     }
 
     // Then create new payouts based on the updated participants
-    if (normalizedParticipants.length > 0 && dealBefore.csv_data_id) {
-      const newPayouts = normalizedParticipants.map((participant: ReturnType<typeof normalizeParticipant>) => ({
-        deal_id: id,
-        csv_data_id: dealBefore.csv_data_id,
-        partner_airtable_id: participant.partner_airtable_id,
-        partner_name: participant.partner_name,
-        partner_role: participant.partner_role,
-        split_pct: participant.split_pct,
-        amount: dealBefore.total_amount
-          ? Number(dealBefore.total_amount) * (participant.split_pct / 100)
-          : 0,
-        status: dealBefore.status === "confirmed" ? "confirmed" : "pending",
-        residual_month: dealBefore.residual_month,
-      }))
+    // NOTE: We need csv_data info to create proper payouts - fetch it if deal has associated events
+    if (normalizedParticipants.length > 0) {
+      // Get csv_data events associated with this deal to get financial data
+      const { data: csvEvents } = await supabase
+        .from("csv_data")
+        .select("id, mid, merchant_name, payout_month, volume, fees, assignment_status")
+        .eq("deal_id", id)
+        .limit(1)
+        .single()
 
-      const { error: insertPayoutsError } = await supabase
-        .from("payouts")
-        .insert(newPayouts)
+      if (csvEvents) {
+        const newPayouts = normalizedParticipants.map((participant: ReturnType<typeof normalizeParticipant>) => ({
+          deal_id: dealBefore.deal_id, // TEXT deal_id like "deal_abc123", NOT UUID
+          csv_data_id: csvEvents.id,
+          mid: csvEvents.mid,
+          merchant_name: csvEvents.merchant_name,
+          payout_month: csvEvents.payout_month, // CORRECT column name
+          partner_airtable_id: participant.partner_airtable_id,
+          partner_name: participant.partner_name,
+          partner_role: participant.partner_role,
+          partner_split_pct: participant.split_pct, // CORRECT column name
+          partner_payout_amount: csvEvents.fees
+            ? Number(csvEvents.fees) * (participant.split_pct / 100)
+            : 0, // CORRECT column name
+          assignment_status: csvEvents.assignment_status === "confirmed" ? "confirmed" : "pending", // CORRECT column name
+          volume: csvEvents.volume || 0,
+          fees: csvEvents.fees || 0,
+        }))
 
-      if (insertPayoutsError) {
-        console.error("[PUT deals] Error creating new payouts:", insertPayoutsError)
-        // Don't fail the whole request, deal was updated successfully
+        const { error: insertPayoutsError } = await supabase
+          .from("payouts")
+          .insert(newPayouts)
+
+        if (insertPayoutsError) {
+          console.error("[PUT deals] Error creating new payouts:", insertPayoutsError)
+          // Don't fail the whole request, deal was updated successfully
+        }
+      } else {
+        console.warn("[PUT deals] No csv_data found for deal, skipping payout creation")
       }
     }
 

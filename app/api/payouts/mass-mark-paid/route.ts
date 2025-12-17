@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
 
     const { data: payoutsBefore } = await supabase
       .from("payouts")
-      .select("id, partner_airtable_id, paid_status, amount")
+      .select("id, partner_airtable_id, paid_status, partner_payout_amount")
       .in("partner_airtable_id", partnerIds)
       .eq("paid_status", "unpaid")
 
