@@ -718,7 +718,7 @@ export function PayoutsDetailedView({ initialPayouts, total, stats }: Props) {
                       <th className="text-left p-3 text-sm font-medium">Volume</th>
                       <SortableHeader field="partner_payout_amount" label="Amount" className="text-right" />
                       <SortableHeader field="payout_type" label="Payout Type" />
-                      <th className="text-center p-3 text-sm font-medium">Paid Status</th>
+                      <th className="text-center p-3 text-sm font-medium">Mark as Paid</th>
                       <th className="text-center p-3 text-sm font-medium">Actions</th>
                     </tr>
                   </thead>

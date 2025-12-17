@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { MoneyDisplay } from "@/components/residuals/shared/MoneyDisplay"
 import { StatusBadge } from "@/components/residuals/shared/StatusBadge"
-import { Loader2, CheckCircle2, Download, ChevronUp, ChevronDown, ArrowUpDown } from "lucide-react"
+import { Loader2, Check, Download, ChevronUp, ChevronDown, ArrowUpDown, DollarSign } from "lucide-react"
 import type { PayoutSummary } from "@/lib/types/database"
 import { toast } from "sonner"
 
@@ -230,14 +230,13 @@ export function PayoutsTable() {
               <SortableHeader field="role" label="Role" />
               <SortableHeader field="merchant_count" label="Merchants" className="text-right" />
               <SortableHeader field="total_payout" label="Total Payout" className="text-right" />
-              <SortableHeader field="status" label="Status" className="text-center" />
-              <TableHead className="text-right">Actions</TableHead>
+              <SortableHeader field="status" label="Mark as Paid" className="text-center" />
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={6} className="h-24 text-center">
+                <TableCell colSpan={5} className="h-24 text-center">
                   <div className="flex justify-center items-center">
                     <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                   </div>
@@ -245,7 +244,7 @@ export function PayoutsTable() {
               </TableRow>
             ) : sortedData.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
                   No payouts found for this month.
                 </TableCell>
               </TableRow>
@@ -264,12 +263,21 @@ export function PayoutsTable() {
                       <MoneyDisplay amount={row.total_payout} />
                     </TableCell>
                     <TableCell className="text-center">
-                      <StatusBadge status={status} type="payment" />
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {!isFullyPaid && (
-                        <Button size="sm" onClick={() => handleMarkPaid(row.partner_airtable_id)}>
-                          <CheckCircle2 className="mr-2 h-4 w-4" />
+                      {isFullyPaid ? (
+                        <div className="inline-flex items-center gap-1.5 text-green-600">
+                          <div className="h-6 w-6 rounded-full bg-green-100 flex items-center justify-center">
+                            <Check className="h-4 w-4" />
+                          </div>
+                          <span className="text-sm font-medium">Paid</span>
+                        </div>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleMarkPaid(row.partner_airtable_id)}
+                          className="text-amber-600 border-amber-300 hover:bg-amber-50"
+                        >
+                          <DollarSign className="h-4 w-4 mr-1" />
                           Mark Paid
                         </Button>
                       )}

@@ -20,13 +20,14 @@ import {
   Percent,
   DollarSign,
   FileText,
+  Check,
+  Loader2,
 } from "lucide-react"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { EditPayoutButton } from "@/components/residuals/payouts/EditPayoutButton"
-import { MarkPaidButton } from "@/components/residuals/payouts/MarkPaidButton"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
@@ -90,8 +91,9 @@ export default function ByParticipantPage() {
 
   const [compareMode, setCompareMode] = useState(false)
   const [selectedForCompare, setSelectedForCompare] = useState<Set<string>>(new Set())
-  const [openAlertDialog, setOpenAlertDialog] = useState(false)
-  const [selectedPayoutId, setSelectedPayoutId] = useState<string | null>(null)
+  const [markPaidDialogOpen, setMarkPaidDialogOpen] = useState(false)
+  const [payoutToMarkPaid, setPayoutToMarkPaid] = useState<any | null>(null)
+  const [markingPaid, setMarkingPaid] = useState(false)
 
   const isCompareCommand = search.toLowerCase().startsWith("/compare")
   const compareNames = useMemo(() => {
@@ -303,17 +305,25 @@ export default function ByParticipantPage() {
     )
   }
 
-  const markPayoutPaid = async (id: string) => {
+  const handleMarkAsPaid = async () => {
+    if (!payoutToMarkPaid) return
+
+    setMarkingPaid(true)
     try {
-      const response = await fetch(`/api/residuals/payouts/${id}/mark-paid`, {
+      const response = await fetch(`/api/payouts/${payoutToMarkPaid.id}/mark-paid`, {
         method: "POST",
       })
       const data = await response.json()
       if (data.success) {
+        // Refresh the participants data
         fetchParticipants()
+        setMarkPaidDialogOpen(false)
+        setPayoutToMarkPaid(null)
       }
     } catch (error) {
       console.error("Error marking payout as paid:", error)
+    } finally {
+      setMarkingPaid(false)
     }
   }
 
@@ -762,8 +772,8 @@ export default function ByParticipantPage() {
                                     label="Amount"
                                     className="text-right"
                                   />
-                                  <SortableHeader participantId={participant.id} field="paid_status" label="Status" />
-                                  <TableHead className="w-[100px]">Actions</TableHead>
+                                  <SortableHeader participantId={participant.id} field="paid_status" label="Mark as Paid" />
+                                  <TableHead className="w-[80px]">Actions</TableHead>
                                 </TableRow>
                               </TableHeader>
                               <TableBody>
@@ -777,15 +787,30 @@ export default function ByParticipantPage() {
                                       <MoneyDisplay amount={payout.partner_payout_amount} />
                                     </TableCell>
                                     <TableCell>
-                                      <Badge variant={payout.paid_status === "paid" ? "default" : "secondary"}>
-                                        {payout.paid_status.toUpperCase()}
-                                      </Badge>
+                                      {payout.paid_status === "paid" ? (
+                                        <div className="flex items-center gap-1.5 text-green-600">
+                                          <div className="h-6 w-6 rounded-full bg-green-100 flex items-center justify-center">
+                                            <Check className="h-4 w-4" />
+                                          </div>
+                                          <span className="text-sm font-medium">Paid</span>
+                                        </div>
+                                      ) : (
+                                        <Button
+                                          variant="outline"
+                                          size="sm"
+                                          onClick={() => {
+                                            setPayoutToMarkPaid(payout)
+                                            setMarkPaidDialogOpen(true)
+                                          }}
+                                          className="text-amber-600 border-amber-300 hover:bg-amber-50"
+                                        >
+                                          <DollarSign className="h-4 w-4 mr-1" />
+                                          Mark Paid
+                                        </Button>
+                                      )}
                                     </TableCell>
                                     <TableCell>
-                                      <div className="flex items-center gap-1">
-                                        <MarkPaidButton payout={payout} onUpdate={fetchParticipants} />
-                                        <EditPayoutButton payout={payout} onUpdate={fetchParticipants} />
-                                      </div>
+                                      <EditPayoutButton payout={payout} onUpdate={fetchParticipants} />
                                     </TableCell>
                                   </TableRow>
                                 ))}
@@ -808,23 +833,27 @@ export default function ByParticipantPage() {
       </Card>
 
       {/* AlertDialog for Mark Paid */}
-      <AlertDialog open={openAlertDialog} onOpenChange={setOpenAlertDialog}>
+      <AlertDialog open={markPaidDialogOpen} onOpenChange={setMarkPaidDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Mark Payout as Paid</AlertDialogTitle>
-            <AlertDialogDescription>Are you sure you want to mark this payout as paid?</AlertDialogDescription>
+            <AlertDialogDescription>
+              Are you sure you want to mark this payout as paid?
+              {payoutToMarkPaid && (
+                <>
+                  <br />
+                  <strong>Merchant:</strong> {payoutToMarkPaid.merchant_name}
+                  <br />
+                  <strong>Amount:</strong> ${payoutToMarkPaid.partner_payout_amount?.toFixed(2)}
+                </>
+              )}
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={async () => {
-                if (selectedPayoutId) {
-                  await markPayoutPaid(selectedPayoutId)
-                  setOpenAlertDialog(false)
-                }
-              }}
-            >
-              Mark Paid
+            <AlertDialogCancel disabled={markingPaid}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleMarkAsPaid} disabled={markingPaid}>
+              {markingPaid ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              Confirm Mark as Paid
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
