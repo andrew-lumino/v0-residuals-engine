@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
@@ -81,7 +82,7 @@ export interface UnassignedQueueRef {
   refresh: () => void
 }
 
-type SortField = "mid" | "merchant_name" | "date" | "volume" | "fees" | "payout_month"
+type SortField = "mid" | "merchant_name" | "date" | "volume" | "fees" | "payout_month" | "payout_type"
 type SortDirection = "asc" | "desc"
 
 // Helper to format payout month for display
@@ -134,6 +135,7 @@ export const UnassignedQueue = forwardRef<UnassignedQueueRef, UnassignedQueuePro
   const [editMid, setEditMid] = useState("")
   const [editMerchantName, setEditMerchantName] = useState("")
   const [isUpdating, setIsUpdating] = useState(false)
+  const [viewingConfirmedEvent, setViewingConfirmedEvent] = useState<UnassignedEvent | null>(null)
 
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false)
@@ -614,13 +616,22 @@ export const UnassignedQueue = forwardRef<UnassignedQueueRef, UnassignedQueuePro
             onSort={onSortChange}
             className="text-right"
           />
+          {activeTab === "confirmed" && (
+            <SortableHeader
+              field="payout_type"
+              label="Deal Type"
+              currentField={sortField}
+              currentDirection={sortDirection}
+              onSort={onSortChange}
+            />
+          )}
           {showActions && <TableHead className="text-right">Actions</TableHead>}
         </TableRow>
       </TableHeader>
       <TableBody>
         {eventsToRender.length === 0 ? (
           <TableRow>
-            <TableCell colSpan={showActions ? 7 : 6} className="text-center py-8 text-muted-foreground">
+            <TableCell colSpan={showActions ? (activeTab === "confirmed" ? 8 : 7) : (activeTab === "confirmed" ? 7 : 6)} className="text-center py-8 text-muted-foreground">
               No events found
             </TableCell>
           </TableRow>
@@ -642,6 +653,20 @@ export const UnassignedQueue = forwardRef<UnassignedQueueRef, UnassignedQueuePro
               <TableCell className="text-right">
                 <MoneyDisplay amount={event.fees} showZero />
               </TableCell>
+              {activeTab === "confirmed" && (
+                <TableCell>
+                  <Badge variant="outline" className="capitalize">
+                    {(() => {
+                      const type = event.payout_type?.toLowerCase() || "residual"
+                      if (type.includes("trueup")) return "Trueup"
+                      if (type.includes("bonus")) return "Bonus"
+                      if (type.includes("residual")) return "Residual"
+                      if (type.includes("upfront")) return "Upfront"
+                      return event.payout_type || "Residual"
+                    })()}
+                  </Badge>
+                </TableCell>
+              )}
               {showActions && (
                 <TableCell className="text-right">
                   <div className="flex items-center justify-end gap-2">
@@ -674,7 +699,16 @@ export const UnassignedQueue = forwardRef<UnassignedQueueRef, UnassignedQueuePro
                       </>
                     )}
                     {activeTab === "confirmed" && (
-                      <StatusBadge status="confirmed" />
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setViewingConfirmedEvent(event)}
+                        >
+                          View Deal
+                        </Button>
+                        <StatusBadge status="confirmed" />
+                      </>
                     )}
                     <Button
                       variant="ghost"
@@ -879,7 +913,17 @@ export const UnassignedQueue = forwardRef<UnassignedQueueRef, UnassignedQueuePro
       )}
 
       {/* Confirmed Deal Viewer */}
-      {activeTab === "confirmed" && <ConfirmedDealViewer events={confirmedEvents} />}
+      {activeTab === "confirmed" && (
+        <ConfirmedDealViewer
+          event={viewingConfirmedEvent}
+          isOpen={!!viewingConfirmedEvent}
+          onClose={() => setViewingConfirmedEvent(null)}
+          onComplete={() => {
+            setViewingConfirmedEvent(null)
+            fetchData()
+          }}
+        />
+      )}
 
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>

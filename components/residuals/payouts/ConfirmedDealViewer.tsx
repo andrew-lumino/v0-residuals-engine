@@ -182,7 +182,9 @@ export function ConfirmedDealViewer({ event, events, isOpen = false, onClose, on
         participants: participants,
       })
 
-      const response = await fetch(`/api/deals/${deal.deal_id}`, {
+      // Use deal.id (UUID) not deal.deal_id (text ID like "deal_abc123")
+      // Use /api/residuals/deals endpoint which properly handles payout creation/updates
+      const response = await fetch(`/api/residuals/deals/${deal.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
